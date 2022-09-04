@@ -1,20 +1,23 @@
 mod custom_mesh;
 
-use std::f32::consts::PI;
-
 use custom_mesh::*;
 
 use bevy::{
+    ecs::system::{lifetimeless::SRes, SystemParamItem},
     prelude::*,
     render::{
         mesh::{Indices, MeshVertexAttribute},
-        render_phase::SetItemPipeline,
-        render_resource::{
-            BlendState, ColorTargetState, ColorWrites, Face, FragmentState, FrontFace,
-            MultisampleState, PolygonMode, PrimitiveState, PrimitiveTopology,
-            RenderPipelineDescriptor, SpecializedRenderPipeline, TextureFormat, VertexBufferLayout,
-            VertexFormat, VertexState, VertexStepMode,
+        render_phase::{
+            EntityRenderCommand, RenderCommandResult, SetItemPipeline, TrackedRenderPass,
         },
+        render_resource::{
+            BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingType,
+            BlendState, BufferBindingType, BufferSize, ColorTargetState, ColorWrites, Face,
+            FragmentState, FrontFace, MultisampleState, PolygonMode, PrimitiveState,
+            PrimitiveTopology, RenderPipelineDescriptor, ShaderStages, SpecializedRenderPipeline,
+            TextureFormat, VertexBufferLayout, VertexFormat, VertexState, VertexStepMode,
+        },
+        renderer::RenderDevice,
         texture::BevyDefault,
     },
     sprite::{
@@ -26,6 +29,9 @@ use bevy::{
 
 #[derive(Component, Default)]
 pub struct CustomMesh2d;
+
+#[derive(Component, Deref, Debug)]
+pub struct CustomShader(Handle<Shader>);
 
 fn main() {
     App::new()
@@ -41,7 +47,7 @@ fn main() {
         .run();
 }
 
-fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
+fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, asset_server: Res<AssetServer>) {
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList);
 
     // Set the position attribute
@@ -69,34 +75,63 @@ fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
 
     commands.spawn_bundle((
         CustomMesh2d::default(),
-        Mesh2dHandle(meshes.add(mesh)),
+        CustomShader(asset_server.load("shaders/custom_mesh_2d.wgsl")),
+        Mesh2dHandle(meshes.add(mesh.clone())),
         Transform::default(),
         GlobalTransform::default(),
         Visibility::default(),
         ComputedVisibility::default(),
     ));
+    //commands.spawn_bundle((
+    //CustomMesh2d::default(),
+    //CustomShader(asset_server.load("shaders/custom_mesh_2d_2.wgsl")),
+    //Mesh2dHandle(meshes.add(mesh)),
+    //Transform::default(),
+    //GlobalTransform::default(),
+    //Visibility::default(),
+    //ComputedVisibility::default(),
+    //));
     commands.spawn_bundle(Camera2dBundle::default());
 }
 
 pub struct CustomMesh2dPipeline {
-    shader: Handle<Shader>,
     mesh2d_pipeline: Mesh2dPipeline,
+    time_bind_group_layout: BindGroupLayout,
 }
 
 impl FromWorld for CustomMesh2dPipeline {
     fn from_world(world: &mut World) -> Self {
-        let asset_server = world.resource::<AssetServer>();
-        let shader = asset_server.load("shaders/custom_mesh_2d.wgsl");
+        let render_device = world.resource::<RenderDevice>();
+        let time_bind_group_layout =
+            render_device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                label: Some("Custom time uniform"),
+                entries: &[BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::VERTEX_FRAGMENT,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: BufferSize::new(std::mem::size_of::<f32>() as u64),
+                    },
+                    count: None,
+                }],
+            });
         Self {
             mesh2d_pipeline: Mesh2dPipeline::from_world(world),
-            shader,
+            time_bind_group_layout,
         }
     }
 }
 
+#[derive(Clone, Hash, Eq, PartialEq)]
+pub struct CustomMesh2dPipelineKey {
+    original_key: Mesh2dPipelineKey,
+    shader: Handle<Shader>,
+}
+
 // Implement the SpecializedPipeline to customize the default rendering from Mesh2dPipeline
 impl SpecializedRenderPipeline for CustomMesh2dPipeline {
-    type Key = Mesh2dPipelineKey;
+    type Key = CustomMesh2dPipelineKey;
 
     fn specialize(&self, key: Self::Key) -> RenderPipelineDescriptor {
         // Customize how we store the meshes vertex attributes in the vertex buffer
@@ -119,10 +154,11 @@ impl SpecializedRenderPipeline for CustomMesh2dPipeline {
                 self.mesh2d_pipeline.view_layout.clone(),
                 // Bind group 1 is the mesh uniform
                 self.mesh2d_pipeline.mesh_layout.clone(),
+                self.time_bind_group_layout.clone(),
             ]),
             vertex: VertexState {
                 // Use our custom shader
-                shader: self.shader.clone(),
+                shader: key.shader.clone(),
                 entry_point: "vertex".into(),
                 shader_defs: Vec::new(),
                 // Use our custom vertex buffer
@@ -132,20 +168,20 @@ impl SpecializedRenderPipeline for CustomMesh2dPipeline {
                 front_face: FrontFace::Cw,
                 cull_mode: Some(Face::Back),
                 unclipped_depth: false,
-                polygon_mode: PolygonMode::Line,
+                polygon_mode: PolygonMode::Fill,
                 conservative: false,
-                topology: key.primitive_topology(),
+                topology: key.original_key.primitive_topology(),
                 strip_index_format: None,
             },
             depth_stencil: None,
             multisample: MultisampleState {
-                count: key.msaa_samples(),
+                count: key.original_key.msaa_samples(),
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
             fragment: Some(FragmentState {
                 // Use our custom shader
-                shader: self.shader.clone(),
+                shader: key.shader,
                 shader_defs: Vec::new(),
                 entry_point: "fragment".into(),
                 targets: vec![Some(ColorTargetState {
@@ -166,6 +202,26 @@ type DrawCustomMesh2d = (
     SetMesh2dViewBindGroup<0>,
     // Set the mesh uniform as bind group 1
     SetMesh2dBindGroup<1>,
+    // Set the time uniform as bind group 2
+    SetTimeBindGroup<2>,
     // Draw the mesh
     DrawMesh2d,
 );
+
+struct SetTimeBindGroup<const I: usize>;
+
+impl<const I: usize> EntityRenderCommand for SetTimeBindGroup<I> {
+    type Param = SRes<TimeMeta>;
+
+    fn render<'w>(
+        _view: Entity,
+        _item: Entity,
+        time_meta: SystemParamItem<'w, '_, Self::Param>,
+        pass: &mut TrackedRenderPass<'w>,
+    ) -> RenderCommandResult {
+        let time_bind_group = time_meta.into_inner().bind_group.as_ref().unwrap();
+        pass.set_bind_group(I, time_bind_group, &[]);
+
+        RenderCommandResult::Success
+    }
+}
