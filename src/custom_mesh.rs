@@ -1,10 +1,18 @@
 use bevy::{
+    core::{Pod, Zeroable},
     core_pipeline::core_2d::Transparent2d,
+    ecs::system::{
+        lifetimeless::{Read, SRes},
+        SystemParamItem,
+    },
     prelude::*,
     render::{
-        extract_resource::{ExtractResource, ExtractResourcePlugin},
+        extract_component::{ExtractComponent, ExtractComponentPlugin},
         render_asset::RenderAssets,
-        render_phase::{AddRenderCommand, DrawFunctions, RenderPhase},
+        render_phase::{
+            AddRenderCommand, DrawFunctions, EntityRenderCommand, RenderCommandResult, RenderPhase,
+            SetItemPipeline, TrackedRenderPass,
+        },
         render_resource::{
             BindGroup, BindGroupDescriptor, BindGroupEntry, Buffer, BufferDescriptor, BufferUsages,
             PipelineCache, SpecializedRenderPipelines,
@@ -13,12 +21,15 @@ use bevy::{
         view::VisibleEntities,
         Extract, RenderApp, RenderStage,
     },
-    sprite::{Mesh2dHandle, Mesh2dPipelineKey, Mesh2dUniform},
+    sprite::{
+        DrawMesh2d, Mesh2dHandle, Mesh2dPipelineKey, Mesh2dUniform, SetMesh2dBindGroup,
+        SetMesh2dViewBindGroup,
+    },
     utils::FloatOrd,
 };
 
 use crate::{
-    CustomMesh2d, CustomMesh2dPipeline, CustomMesh2dPipelineKey, CustomShader, DrawCustomMesh2d,
+    CustomColor, CustomMesh2d, CustomMesh2dPipeline, CustomMesh2dPipelineKey, CustomShader,
 };
 
 pub struct CustomMesh2dPlugin;
@@ -28,76 +39,76 @@ impl Plugin for CustomMesh2dPlugin {
         let render_device = app.world.resource::<RenderDevice>();
         let buffer = render_device.create_buffer(&BufferDescriptor {
             label: Some("custom color uniform buffer"),
-            size: std::mem::size_of::<f32>() as u64,
+            size: 16, // 4 * 4 (f32 size is 4)
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        app.add_plugin(ExtractResourcePlugin::<ExtractedTime>::default());
+        app.add_plugin(ExtractComponentPlugin::<ExtractedCustomColor>::default());
         // Register our custom draw function and pipeline, and add our render systems
         let render_app = app.get_sub_app_mut(RenderApp).unwrap();
         render_app
             .add_render_command::<Transparent2d, DrawCustomMesh2d>()
-            .insert_resource(TimeMeta {
+            .insert_resource(CustomColorMeta {
                 buffer,
                 bind_group: None,
             })
             .init_resource::<CustomMesh2dPipeline>()
             .init_resource::<SpecializedRenderPipelines<CustomMesh2dPipeline>>()
-            .add_system_to_stage(RenderStage::Prepare, prepare_time)
+            .add_system_to_stage(RenderStage::Prepare, prepare_custom_color)
             .add_system_to_stage(RenderStage::Extract, extract_custom_mesh2d)
             .add_system_to_stage(RenderStage::Queue, queue_custom_mesh2d)
-            .add_system_to_stage(RenderStage::Queue, queue_time_bind_group);
+            .add_system_to_stage(RenderStage::Queue, queue_custom_color_bind_group);
     }
 }
 
-#[derive(Default)]
-struct ExtractedTime {
-    seconds_since_startup: f32,
-}
+#[derive(Component, Default, Deref, Pod, Copy, Clone, Zeroable)]
+#[repr(C)]
+struct ExtractedCustomColor(Vec4);
 
-impl ExtractResource for ExtractedTime {
-    type Source = Time;
+impl ExtractComponent for ExtractedCustomColor {
+    type Query = Read<CustomColor>;
 
-    fn extract_resource(time: &Self::Source) -> Self {
-        ExtractedTime {
-            seconds_since_startup: time.seconds_since_startup() as f32,
-        }
+    type Filter = ();
+
+    fn extract_component(color: bevy::ecs::query::QueryItem<Self::Query>) -> Self {
+        ExtractedCustomColor(Vec4::from(**color))
     }
 }
 
-pub struct TimeMeta {
+pub struct CustomColorMeta {
     pub buffer: Buffer,
     pub bind_group: Option<BindGroup>,
 }
 
 // Write the extracted time into the corresponding uniform buffer
-fn prepare_time(
-    time: Res<ExtractedTime>,
-    time_meta: ResMut<TimeMeta>,
+fn prepare_custom_color(
+    custom_color_query: Query<&ExtractedCustomColor>,
+    custom_color_meta: ResMut<CustomColorMeta>,
     render_queue: Res<RenderQueue>,
 ) {
+    let custom_color = custom_color_query.get_single().unwrap();
     render_queue.write_buffer(
-        &time_meta.buffer,
+        &custom_color_meta.buffer,
         0,
-        bevy::core::cast_slice(&[time.seconds_since_startup]),
+        bevy::core::cast_slice(&[**custom_color]),
     );
 }
 
 // Create a bind group for the time uniform buffer
-fn queue_time_bind_group(
+fn queue_custom_color_bind_group(
     render_device: Res<RenderDevice>,
-    mut time_meta: ResMut<TimeMeta>,
+    mut custom_color_meta: ResMut<CustomColorMeta>,
     pipeline: Res<CustomMesh2dPipeline>,
 ) {
     let bind_group = render_device.create_bind_group(&BindGroupDescriptor {
         label: None,
-        layout: &pipeline.time_bind_group_layout,
+        layout: &pipeline.color_bind_group_layout,
         entries: &[BindGroupEntry {
             binding: 0,
-            resource: time_meta.buffer.as_entire_binding(),
+            resource: custom_color_meta.buffer.as_entire_binding(),
         }],
     });
-    time_meta.bind_group = Some(bind_group);
+    custom_color_meta.bind_group = Some(bind_group);
 }
 
 // Extract the [`CustomMesh2d`] marker component into the render app
@@ -178,5 +189,37 @@ pub fn queue_custom_mesh2d(
                 });
             }
         }
+    }
+}
+
+// This specifies how to render a custom mesh 2d
+type DrawCustomMesh2d = (
+    // Set the pipeline
+    SetItemPipeline,
+    // Set the view uniform as bind group 0
+    SetMesh2dViewBindGroup<0>,
+    // Set the mesh uniform as bind group 1
+    SetMesh2dBindGroup<1>,
+    // Set the custom color uniform as bind group 2
+    SetCustomColorBindGroup<2>,
+    // Draw the mesh
+    DrawMesh2d,
+);
+
+struct SetCustomColorBindGroup<const I: usize>;
+
+impl<const I: usize> EntityRenderCommand for SetCustomColorBindGroup<I> {
+    type Param = SRes<CustomColorMeta>;
+
+    fn render<'w>(
+        _view: Entity,
+        _item: Entity,
+        custom_color: SystemParamItem<'w, '_, Self::Param>,
+        pass: &mut TrackedRenderPass<'w>,
+    ) -> RenderCommandResult {
+        let custom_color_bind_group = custom_color.into_inner().bind_group.as_ref().unwrap();
+        pass.set_bind_group(I, custom_color_bind_group, &[]);
+
+        RenderCommandResult::Success
     }
 }

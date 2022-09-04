@@ -5,11 +5,8 @@
 @group(1) @binding(0)
 var<uniform> mesh: Mesh2d;
 
-struct Time {
-    time_since_startup: f32,
-};
 @group(2) @binding(0)
-var<uniform> time: Time;
+var<uniform> ourColor: vec4<f32>;
 
 // NOTE: Bindings must come before functions that use them!
 #import bevy_sprite::mesh2d_functions
@@ -50,5 +47,5 @@ struct FragmentInput {
 /// Entry point for the fragment shader
 @fragment
 fn fragment(in: FragmentInput) -> @location(0) vec4<f32> {
-    return vec4<f32>(in.color.rgb, (sin(time.time_since_startup) / 2.0) + 0.5);
+    return ourColor;
 }
