@@ -13,8 +13,8 @@ use bevy::{
             SetItemPipeline, TrackedRenderPass,
         },
         render_resource::{
-            BindGroup, BindGroupDescriptor, BindGroupEntry, Buffer, BufferDescriptor, BufferUsages,
-            PipelineCache, SpecializedRenderPipelines,
+            BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, Buffer,
+            BufferDescriptor, BufferUsages, PipelineCache, SpecializedRenderPipelines,
         },
         renderer::{RenderDevice, RenderQueue},
         view::VisibleEntities,
@@ -30,7 +30,7 @@ use bytemuck::{Pod, Zeroable};
 
 use crate::{
     ColorUniform, CustomMesh2d, CustomMesh2dPipeline, CustomMesh2dPipelineKey, CustomShader,
-    OffsetUniform,
+    OffsetUniform, TextureShaderResource,
 };
 
 pub struct CustomMesh2dPlugin;
@@ -68,6 +68,7 @@ impl Plugin for CustomMesh2dPlugin {
             .init_resource::<CustomMesh2dPipeline>()
             .init_resource::<SpecializedRenderPipelines<CustomMesh2dPipeline>>()
             .add_system_to_stage(RenderStage::Extract, extract_custom_mesh2d)
+            .add_system_to_stage(RenderStage::Extract, extract_texture)
             .add_system_to_stage(RenderStage::Prepare, prepare_uniforms)
             .add_system_to_stage(RenderStage::Queue, queue_custom_mesh2d)
             .add_system_to_stage(RenderStage::Queue, queue_uniforms_bind_group);
@@ -81,6 +82,9 @@ pub struct ExtractedColorUniform(Vec4);
 #[derive(Component, Default, Deref, Pod, Copy, Clone, Zeroable)]
 #[repr(C)]
 pub struct ExtractedOffsetUniform(f32);
+
+#[derive(Deref, DerefMut)]
+pub struct ExtractedTexture(Handle<Image>);
 
 impl ExtractComponent for ExtractedColorUniform {
     type Query = Read<ColorUniform>;
@@ -127,6 +131,21 @@ pub fn extract_custom_mesh2d(
     commands.insert_or_spawn_batch(values);
 }
 
+// Extract the [`TextureShaderResource`] into the render app
+pub fn extract_texture(
+    mut commands: Commands,
+    // When extracting, you must use 'Extract' to mark the 'SystemParam's
+    // which should be taken from the main world.
+    texture: Extract<Res<TextureShaderResource>>,
+) {
+    match &texture.0 {
+        Some(t) => {
+            commands.insert_resource(ExtractedTexture(t.clone()));
+        }
+        None => {}
+    };
+}
+
 // Write the extracted uniforms into the corresponding uniform buffer
 fn prepare_uniforms(
     color_uniform_query: Query<&ExtractedColorUniform>,
@@ -134,6 +153,9 @@ fn prepare_uniforms(
     uniforms_meta: ResMut<UniformsMeta>,
     render_queue: Res<RenderQueue>,
 ) {
+    if color_uniform_query.is_empty() && offset_uniform_query.is_empty() {
+        return;
+    }
     let color_uniform = color_uniform_query.get_single().unwrap();
     let offset_uniform = offset_uniform_query.get_single().unwrap();
     render_queue.write_buffer(
@@ -153,7 +175,10 @@ fn queue_uniforms_bind_group(
     render_device: Res<RenderDevice>,
     mut uniforms_meta: ResMut<UniformsMeta>,
     pipeline: Res<CustomMesh2dPipeline>,
+    texture: Res<ExtractedTexture>,
+    images: Res<RenderAssets<Image>>,
 ) {
+    let image = images.get(&**texture).unwrap();
     let bind_group = render_device.create_bind_group(&BindGroupDescriptor {
         label: None,
         layout: &pipeline.bind_group_layout,
@@ -165,6 +190,14 @@ fn queue_uniforms_bind_group(
             BindGroupEntry {
                 binding: 1,
                 resource: uniforms_meta.buffers[1].as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 2,
+                resource: BindingResource::TextureView(&image.texture_view),
+            },
+            BindGroupEntry {
+                binding: 3,
+                resource: BindingResource::Sampler(&image.sampler),
             },
         ],
     });
