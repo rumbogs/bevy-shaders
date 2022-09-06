@@ -8,6 +8,9 @@ var<uniform> mesh: Mesh2d;
 @group(2) @binding(0)
 var<uniform> ourColor: vec4<f32>;
 
+@group(2) @binding(1)
+var<uniform> offset: f32;
+
 // NOTE: Bindings must come before functions that use them!
 #import bevy_sprite::mesh2d_functions
 
@@ -22,7 +25,16 @@ struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     // We pass the vertex color to the fragment shader in location 0
     @location(0) color: vec4<f32>,
+    @location(1) position: vec4<f32>,
 };
+
+fn rotate_coords(coords: vec3<f32>, degrees: f32) -> vec3<f32> {
+    var PI: f32 = 3.14159;
+    let rad = degrees * PI / 180.0;
+    let x = coords.x * cos(rad) - coords.y * sin(rad);
+    let y = coords.y * cos(rad) - coords.x * sin(rad);
+    return vec3<f32>(x, y, coords.z);
+} 
 
 /// Entry point for the vertex shader
 @vertex
@@ -33,6 +45,7 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     // out.clip_position = mesh2d_position_local_to_clip(mesh.model, vec4<f32>(vertex.position, 1.0));
     // Otherwise, if we have normalized coords (-1, 1) we can just copy the position
     out.clip_position = vec4<f32>(vertex.position, 1.0);
+    out.position = vec4<f32>(vertex.position, 1.0);
     // Unpack the `u32` from the vertex buffer into the `vec4<f32>` used by the fragment shader
     out.color = vec4<f32>((vec4<u32>(vertex.color) >> vec4<u32>(0u, 8u, 16u, 24u)) & vec4<u32>(255u)) / 255.0;
     return out;
@@ -42,10 +55,13 @@ fn vertex(vertex: Vertex) -> VertexOutput {
 struct FragmentInput {
     // The color is interpolated between vertices by default
     @location(0) color: vec4<f32>,
+    @location(1) position: vec4<f32>,
 };
 
 /// Entry point for the fragment shader
 @fragment
-fn fragment(in: FragmentInput) -> @location(0) vec4<f32> {
-    return ourColor;
+fn fragment(
+    in: FragmentInput,
+) -> @location(0) vec4<f32> {
+    return in.position;
 }

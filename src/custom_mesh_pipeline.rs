@@ -16,29 +16,45 @@ use bevy::{
 
 pub struct CustomMesh2dPipeline {
     pub mesh2d_pipeline: Mesh2dPipeline,
-    pub color_bind_group_layout: BindGroupLayout,
+    pub bind_group_layout: BindGroupLayout,
 }
 
 impl FromWorld for CustomMesh2dPipeline {
     fn from_world(world: &mut World) -> Self {
         let render_device = world.resource::<RenderDevice>();
-        let color_bind_group_layout =
+
+        let bind_group_layout =
             render_device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                label: Some("Custom color uniform"),
-                entries: &[BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStages::VERTEX_FRAGMENT,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: BufferSize::new(16), // 4 * 4 (f32 size is 4)
+                label: Some("Uniforms"),
+                entries: &[
+                    BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: ShaderStages::VERTEX_FRAGMENT,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: BufferSize::new(
+                                4 * (std::mem::size_of::<f32>() as u64),
+                            ),
+                        },
+                        count: None,
                     },
-                    count: None,
-                }],
+                    BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: ShaderStages::VERTEX_FRAGMENT,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: BufferSize::new(std::mem::size_of::<f32>() as u64),
+                        },
+                        count: None,
+                    },
+                ],
             });
+
         Self {
             mesh2d_pipeline: Mesh2dPipeline::from_world(world),
-            color_bind_group_layout,
+            bind_group_layout,
         }
     }
 }
@@ -74,7 +90,8 @@ impl SpecializedRenderPipeline for CustomMesh2dPipeline {
                 self.mesh2d_pipeline.view_layout.clone(),
                 // Bind group 1 is the mesh uniform
                 self.mesh2d_pipeline.mesh_layout.clone(),
-                self.color_bind_group_layout.clone(),
+                // Bind group 2 contains custom uniforms
+                self.bind_group_layout.clone(),
             ]),
             vertex: VertexState {
                 // Use our custom shader
@@ -85,7 +102,7 @@ impl SpecializedRenderPipeline for CustomMesh2dPipeline {
                 buffers: vec![vertex_layout],
             },
             primitive: PrimitiveState {
-                front_face: FrontFace::Cw,
+                front_face: FrontFace::Ccw,
                 cull_mode: Some(Face::Back),
                 unclipped_depth: false,
                 polygon_mode: PolygonMode::Fill,
