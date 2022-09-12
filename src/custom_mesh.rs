@@ -24,6 +24,8 @@ pub struct CustomMesh {
     pub color: Vec4,
     pub offset: f32,
     pub base_color_texture: Option<Handle<Image>>,
+    pub mix_color_texture: Option<Handle<Image>>,
+    pub transform_matrix: Mat4,
 }
 
 impl AsBindGroup for CustomMesh {
@@ -36,6 +38,7 @@ impl AsBindGroup for CustomMesh {
         images: &RenderAssets<Image>,
         _fallback_image: &FallbackImage,
     ) -> Result<PreparedBindGroup<Self>, AsBindGroupError> {
+        // Base color texture
         let base_color_texture = self
             .base_color_texture
             .as_ref()
@@ -44,10 +47,23 @@ impl AsBindGroup for CustomMesh {
             .get(base_color_texture)
             .ok_or(AsBindGroupError::RetryNextUpdate)?;
 
+        // Mix color texture
+        let mix_color_texture = self
+            .mix_color_texture
+            .as_ref()
+            .ok_or(AsBindGroupError::RetryNextUpdate)?;
+        let image2 = images
+            .get(mix_color_texture)
+            .ok_or(AsBindGroupError::RetryNextUpdate)?;
+
         let mut color_buffer = UniformBuffer::new(Vec::new());
         color_buffer.write(&self.color).unwrap();
         let mut offset_buffer = UniformBuffer::new(Vec::new());
         offset_buffer.write(&self.offset).unwrap();
+        let mut transform_matrix_buffer = UniformBuffer::new(Vec::new());
+        transform_matrix_buffer
+            .write(&self.transform_matrix)
+            .unwrap();
 
         let bindings = vec![
             OwnedBindingResource::Buffer(render_device.create_buffer_with_data(
@@ -64,8 +80,17 @@ impl AsBindGroup for CustomMesh {
                     contents: offset_buffer.as_ref(),
                 },
             )),
+            OwnedBindingResource::Buffer(render_device.create_buffer_with_data(
+                &BufferInitDescriptor {
+                    label: None,
+                    usage: BufferUsages::COPY_DST | BufferUsages::UNIFORM,
+                    contents: transform_matrix_buffer.as_ref(),
+                },
+            )),
             OwnedBindingResource::TextureView(image.texture_view.clone()),
             OwnedBindingResource::Sampler(image.sampler.clone()),
+            OwnedBindingResource::TextureView(image2.texture_view.clone()),
+            OwnedBindingResource::Sampler(image2.sampler.clone()),
         ];
 
         let bind_group = render_device.create_bind_group(&BindGroupDescriptor {
@@ -80,14 +105,26 @@ impl AsBindGroup for CustomMesh {
                 },
                 BindGroupEntry {
                     binding: 2,
-                    resource: BindingResource::TextureView(&image.texture_view),
+                    resource: bindings[2].get_binding(),
                 },
                 BindGroupEntry {
                     binding: 3,
+                    resource: BindingResource::TextureView(&image.texture_view),
+                },
+                BindGroupEntry {
+                    binding: 4,
                     resource: BindingResource::Sampler(&image.sampler),
                 },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: BindingResource::TextureView(&image2.texture_view),
+                },
+                BindGroupEntry {
+                    binding: 6,
+                    resource: BindingResource::Sampler(&image2.sampler),
+                },
             ],
-            label: Some("custom_mesh_2d_bind_group"),
+            label: Some("custom_mesh_bind_group"),
             layout,
         });
 
@@ -100,7 +137,7 @@ impl AsBindGroup for CustomMesh {
 
     fn bind_group_layout(render_device: &RenderDevice) -> BindGroupLayout {
         render_device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("Custom Mesh2d Bind Group Layout"),
+            label: Some("Custom Mesh Bind Group Layout"),
             entries: &[
                 BindGroupLayoutEntry {
                     binding: 0,
@@ -108,7 +145,7 @@ impl AsBindGroup for CustomMesh {
                     ty: BindingType::Buffer {
                         ty: BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: BufferSize::new(4 * (std::mem::size_of::<f32>() as u64)),
+                        min_binding_size: BufferSize::new(std::mem::size_of::<Vec4>() as u64),
                     },
                     count: None,
                 },
@@ -125,6 +162,16 @@ impl AsBindGroup for CustomMesh {
                 BindGroupLayoutEntry {
                     binding: 2,
                     visibility: ShaderStages::VERTEX_FRAGMENT,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: BufferSize::new(std::mem::size_of::<Mat4>() as u64),
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: ShaderStages::VERTEX_FRAGMENT,
                     ty: BindingType::Texture {
                         multisampled: false,
                         sample_type: TextureSampleType::Float { filterable: true },
@@ -133,7 +180,23 @@ impl AsBindGroup for CustomMesh {
                     count: None,
                 },
                 BindGroupLayoutEntry {
-                    binding: 3,
+                    binding: 4,
+                    visibility: ShaderStages::VERTEX_FRAGMENT,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: ShaderStages::VERTEX_FRAGMENT,
+                    ty: BindingType::Texture {
+                        multisampled: false,
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 6,
                     visibility: ShaderStages::VERTEX_FRAGMENT,
                     ty: BindingType::Sampler(SamplerBindingType::Filtering),
                     count: None,
@@ -160,7 +223,7 @@ impl Material for CustomMesh {
     ) -> Result<(), SpecializedMeshPipelineError> {
         descriptor.label = Some("Custom Mesh pipeline descriptor".into());
         descriptor.primitive = PrimitiveState {
-            front_face: FrontFace::Ccw,
+            front_face: FrontFace::Cw,
             cull_mode: Some(Face::Back),
             unclipped_depth: false,
             polygon_mode: PolygonMode::Fill,
