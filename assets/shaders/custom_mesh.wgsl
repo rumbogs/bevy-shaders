@@ -9,18 +9,24 @@ var<uniform> ourColor: vec4<f32>;
 var<uniform> offset: f32;
 
 @group(1) @binding(2)
-var<uniform> transform_matrix: mat4x4<f32>;
+var<uniform> model_mat: mat4x4<f32>;
 
 @group(1) @binding(3)
-var texture: texture_2d<f32>;
+var<uniform> view_mat: mat4x4<f32>;
 
 @group(1) @binding(4)
-var texture_sampler: sampler;
+var<uniform> projection_mat: mat4x4<f32>;
 
 @group(1) @binding(5)
-var texture2: texture_2d<f32>;
+var texture: texture_2d<f32>;
 
 @group(1) @binding(6)
+var texture_sampler: sampler;
+
+@group(1) @binding(7)
+var texture2: texture_2d<f32>;
+
+@group(1) @binding(8)
 var texture_sampler2: sampler;
 
 // NOTE: Bindings must come before functions that use them!
@@ -58,7 +64,7 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     // This needs to be done whenever we pass in viewport size coords (1280 x 720)
     //out.clip_position = mesh_position_local_to_clip(mesh.model, vec4<f32>(vertex.position, 1.0));
     // Otherwise, if we have normalized coords (-1, 1) we can just copy the position
-    out.clip_position = transform_matrix * vec4<f32>(vertex.position.xy, 1.0, 1.0);
+    out.clip_position = projection_mat * view_mat * model_mat * vec4<f32>(vertex.position, 1.0);
     out.position = vec4<f32>(vertex.position, 1.0);
     // Unpack the `u32` from the vertex buffer into the `vec4<f32>` used by the fragment shader
     out.color = vec4<f32>((vec4<u32>(vertex.color) >> vec4<u32>(0u, 8u, 16u, 24u)) & vec4<u32>(255u)) / 255.0;
