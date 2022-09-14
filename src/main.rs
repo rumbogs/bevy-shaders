@@ -1,5 +1,5 @@
-mod custom_mesh;
-use custom_mesh::*;
+mod custom_material;
+use custom_material::*;
 
 use bevy::{
     asset::LoadState,
@@ -11,18 +11,10 @@ use bevy::{
             TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, VertexFormat,
         },
         texture::ImageSampler,
+        view::NoFrustumCulling,
     },
     window::close_on_esc,
 };
-
-#[derive(Component, Deref, Debug)]
-pub struct CustomMeshHandle(Handle<CustomMesh>);
-
-#[derive(Component, Deref, DerefMut, Debug)]
-pub struct ColorUniform(Color);
-
-#[derive(Component, Deref, Debug)]
-pub struct OffsetUniform(f32);
 
 #[derive(Deref, DerefMut, Debug)]
 pub struct TextureShaderResources(Option<Vec<Handle<Image>>>);
@@ -32,6 +24,19 @@ enum AppState {
     LoadAssets,
     Main,
 }
+
+const CUBE_POS: [Vec3; 10] = [
+    Vec3::new(0.0, 0.0, 0.0),
+    Vec3::new(2.0, 5.0, -15.0),
+    Vec3::new(-1.5, -2.2, -2.5),
+    Vec3::new(-3.8, -2.0, -12.3),
+    Vec3::new(2.4, -0.4, -3.5),
+    Vec3::new(-1.7, 3.0, -7.5),
+    Vec3::new(1.3, -2.0, -2.5),
+    Vec3::new(1.5, 2.0, -2.5),
+    Vec3::new(1.5, 0.2, -1.5),
+    Vec3::new(-1.3, 1.0, -1.5),
+];
 
 fn main() {
     App::new()
@@ -50,62 +55,40 @@ fn main() {
         //})
         .insert_resource(TextureShaderResources(None))
         .add_plugins(DefaultPlugins)
-        .add_plugin(MaterialPlugin::<CustomMesh>::default())
+        .add_plugin(CustomMaterialPlugin)
         .add_state(AppState::LoadAssets)
         .add_system_set(SystemSet::on_enter(AppState::LoadAssets).with_system(load_assets))
         .add_system_set(SystemSet::on_update(AppState::LoadAssets).with_system(assets_loaded))
         .add_system_set(SystemSet::on_enter(AppState::Main).with_system(setup))
-        .add_system_set(SystemSet::on_update(AppState::Main).with_system(update_custom_color))
         .add_system_set(SystemSet::on_update(AppState::Main).with_system(update_offset))
         .add_system_set(SystemSet::on_update(AppState::Main).with_system(update_model_mat))
         .add_system(close_on_esc)
         .run();
 }
 
-fn update_custom_color(
-    mut query: Query<&mut CustomMeshHandle>,
-    mut materials: ResMut<Assets<CustomMesh>>,
-    time: Res<Time>,
-) {
+fn update_offset(mut query: Query<&mut OffsetUniform>, input: Res<Input<KeyCode>>) {
     if query.is_empty() {
         return;
     }
-    let custom_mesh_handle = query.get_single_mut().unwrap();
-    let material = materials.get_mut(&**custom_mesh_handle).unwrap();
-    material.color.y = (time.seconds_since_startup() as f32).sin() / 2.0 + 0.5;
-}
-
-fn update_offset(
-    mut query: Query<&mut CustomMeshHandle>,
-    mut materials: ResMut<Assets<CustomMesh>>,
-    input: Res<Input<KeyCode>>,
-) {
-    if query.is_empty() {
-        return;
-    }
-    let custom_mesh_handle = query.get_single_mut().unwrap();
-    let material = materials.get_mut(&**custom_mesh_handle).unwrap();
+    let mut offset_uniform = query.get_single_mut().unwrap();
     if input.just_pressed(KeyCode::W) {
-        material.offset += 0.1;
+        **offset_uniform += 0.1;
     }
     if input.just_pressed(KeyCode::S) {
-        material.offset -= 0.1;
+        **offset_uniform -= 0.1;
     }
 }
 
-fn update_model_mat(
-    mut query: Query<&mut CustomMeshHandle>,
-    mut materials: ResMut<Assets<CustomMesh>>,
-    time: Res<Time>,
-) {
+fn update_model_mat(mut query: Query<&mut InstanceMaterialData>, time: Res<Time>) {
     if query.is_empty() {
         return;
     }
-    let custom_mesh_handle = query.get_single_mut().unwrap();
-    let material = materials.get_mut(&**custom_mesh_handle).unwrap();
-    material.model =
-        Mat4::from_rotation_y((time.seconds_since_startup() as f32) * 50.0_f32.to_radians())
+    let mut instance_material_data = query.get_single_mut().unwrap();
+    for (i, instance_data) in (**instance_material_data).iter_mut().enumerate() {
+        instance_data.model = Mat4::from_translation(CUBE_POS[i])
+            * Mat4::from_rotation_y((time.seconds_since_startup() as f32) * 50.0_f32.to_radians())
             * Mat4::from_rotation_x(25.0_f32.to_radians());
+    }
 }
 
 fn load_assets(
@@ -140,7 +123,6 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
-    mut custom_mesh_materials: ResMut<Assets<CustomMesh>>,
     textures: ResMut<TextureShaderResources>,
 ) {
     match &**textures {
@@ -304,26 +286,36 @@ fn setup(
             //let indices = vec![0, 1, 3, 1, 2, 3];
             //mesh.set_indices(Some(Indices::U16(indices)));
 
-            let model = Mat4::from_rotation_x(-55.0_f32.to_radians());
             let view = Mat4::from_translation(Vec3::new(0.0, 0.0, -3.0));
             let projection = Mat4::perspective_rh(45.0_f32.to_radians(), 800.0 / 600.0, 0.1, 100.0);
-            let custom_mesh_handle = custom_mesh_materials.add(CustomMesh {
-                color: Vec4::from(Color::BLACK),
-                offset: 0.1,
-                base_color_texture: Some(textures[0].clone()),
-                mix_color_texture: Some(textures[1].clone()),
-                model,
-                view,
-                projection,
-            });
 
             commands
-                .spawn_bundle(MaterialMeshBundle::<CustomMesh> {
-                    mesh: meshes.add(mesh.clone()),
-                    material: custom_mesh_handle.clone(),
-                    ..default()
-                })
-                .insert(CustomMeshHandle(custom_mesh_handle));
+                .spawn()
+                .insert_bundle((
+                    meshes.add(mesh.clone()),
+                    InstanceMaterialData(
+                        (1..=CUBE_POS.len())
+                            .map(|i| InstanceData {
+                                model: Mat4::from_translation(CUBE_POS[i - 1])
+                                    * Mat4::from_rotation_x((20.0_f32 * i as f32).to_radians()),
+                            })
+                            .collect(),
+                    ),
+                    OffsetUniform(0.1),
+                    BaseColorTexture(textures[0].clone()),
+                    MixColorTexture(textures[1].clone()),
+                    ViewMat(view),
+                    ProjectionMat(projection),
+                    // NOTE: Frustum culling is done based on the Aabb of the Mesh and the GlobalTransform.
+                    // As the cube is at the origin, if its Aabb moves outside the view frustum, all the
+                    // instanced cubes will be culled.
+                    // The InstanceMaterialData contains the 'GlobalTransform' information for this custom
+                    // instancing, and that is not taken into account with the built-in frustum culling.
+                    // We must disable the built-in frustum culling by adding the `NoFrustumCulling` marker
+                    // component to avoid incorrect culling.
+                    NoFrustumCulling,
+                ))
+                .insert_bundle(SpatialBundle::default());
         }
         None => {}
     };
