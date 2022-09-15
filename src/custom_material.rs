@@ -18,13 +18,16 @@ use bevy::{
             BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout,
             BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingResource, BindingType, Buffer,
             BufferBindingType, BufferInitDescriptor, BufferSize, BufferUsages, CompareFunction,
-            DepthBiasState, DepthStencilState, FrontFace, PipelineCache, PolygonMode,
-            PrimitiveState, RenderPipelineDescriptor, SamplerBindingType, ShaderStages,
-            SpecializedMeshPipeline, SpecializedMeshPipelineError, SpecializedMeshPipelines,
-            StencilState, TextureFormat, TextureSampleType, TextureViewDimension, VertexAttribute,
-            VertexBufferLayout, VertexFormat, VertexStepMode,
+            DepthBiasState, DepthStencilState, Extent3d, FrontFace, PipelineCache, PolygonMode,
+            PrimitiveState, RenderPipelineDescriptor, SamplerBindingType, SamplerDescriptor,
+            ShaderStages, SpecializedMeshPipeline, SpecializedMeshPipelineError,
+            SpecializedMeshPipelines, StencilState, TextureDescriptor, TextureDimension,
+            TextureFormat, TextureSampleType, TextureUsages, TextureViewDescriptor,
+            TextureViewDimension, VertexAttribute, VertexBufferLayout, VertexFormat,
+            VertexStepMode,
         },
         renderer::RenderDevice,
+        texture::{FallbackImage, GpuImage},
         view::ExtractedView,
         RenderApp, RenderStage,
     },
@@ -129,6 +132,7 @@ impl Plugin for CustomMaterialPlugin {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn queue_custom_material(
     transparent_3d_draw_functions: Res<DrawFunctions<Transparent3d>>,
     custom_pipeline: Res<CustomMaterialPipeline>,
@@ -202,8 +206,37 @@ fn prepare_buffers(
             length: instance_data.len(),
         });
 
-        let base_tex_image = images.get(base_tex).unwrap();
-        let mix_tex_image = images.get(mix_tex).unwrap();
+        let fallback_image_size = Extent3d {
+            width: 512,
+            height: 512,
+            ..default()
+        };
+        let fallback_tex_descriptor = TextureDescriptor {
+            label: None,
+            size: fallback_image_size,
+            mip_level_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8UnormSrgb,
+            sample_count: 1,
+            usage: TextureUsages::TEXTURE_BINDING
+                | TextureUsages::COPY_DST
+                | TextureUsages::RENDER_ATTACHMENT,
+        };
+        let fallback_tex = render_device.create_texture(&fallback_tex_descriptor);
+        let fallback_sampler = SamplerDescriptor::default();
+        let fallback_gpu_image = GpuImage {
+            texture: fallback_tex.clone(),
+            texture_view: fallback_tex.create_view(&TextureViewDescriptor::default()),
+            texture_format: TextureFormat::Rgba8UnormSrgb,
+            sampler: render_device.create_sampler(&fallback_sampler),
+            size: Vec2::new(
+                fallback_image_size.width as f32,
+                fallback_image_size.height as f32,
+            ),
+        };
+
+        let base_tex_image = images.get(base_tex).unwrap_or(&fallback_gpu_image);
+        let mix_tex_image = images.get(mix_tex).unwrap_or(&fallback_gpu_image);
 
         let view_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("view mat buffer"),

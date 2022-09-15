@@ -84,7 +84,7 @@ fn update_model_mat(mut query: Query<&mut InstanceMaterialData>, time: Res<Time>
         return;
     }
     let mut instance_material_data = query.get_single_mut().unwrap();
-    for (i, instance_data) in (**instance_material_data).iter_mut().enumerate() {
+    for (i, instance_data) in (**instance_material_data).iter_mut().enumerate().step_by(3) {
         instance_data.model = Mat4::from_translation(CUBE_POS[i])
             * Mat4::from_rotation_y((time.seconds_since_startup() as f32) * 50.0_f32.to_radians())
             * Mat4::from_rotation_x(25.0_f32.to_radians());
@@ -320,6 +320,8 @@ fn setup(
         None => {}
     };
 
+    // This is just used so that we can see something, there's basically another camera created
+    // using model, view, projection matrices
     commands.spawn_bundle(Camera3dBundle {
         camera_3d: Camera3d {
             // This is 0.0 by default because 0.0 is the far plane due to bevy's use of reverse-z projections.
