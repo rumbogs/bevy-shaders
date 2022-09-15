@@ -1,3 +1,4 @@
+use crate::CustomCamera;
 use bevy::{
     core_pipeline::core_3d::Transparent3d,
     ecs::system::{
@@ -27,9 +28,9 @@ use bevy::{
             VertexStepMode,
         },
         renderer::RenderDevice,
-        texture::{FallbackImage, GpuImage},
+        texture::GpuImage,
         view::ExtractedView,
-        RenderApp, RenderStage,
+        MainWorld, RenderApp, RenderStage,
     },
 };
 use bytemuck::{Pod, Zeroable};
@@ -88,37 +89,11 @@ impl ExtractComponent for MixColorTexture {
     }
 }
 
-#[derive(Component, Deref, Debug)]
-pub struct ViewMat(pub Mat4);
-
-impl ExtractComponent for ViewMat {
-    type Query = &'static ViewMat;
-    type Filter = ();
-
-    fn extract_component(item: bevy::ecs::query::QueryItem<Self::Query>) -> Self {
-        ViewMat(**item)
-    }
-}
-
-#[derive(Component, Deref, Debug)]
-pub struct ProjectionMat(pub Mat4);
-
-impl ExtractComponent for ProjectionMat {
-    type Query = &'static ProjectionMat;
-    type Filter = ();
-
-    fn extract_component(item: bevy::ecs::query::QueryItem<Self::Query>) -> Self {
-        ProjectionMat(**item)
-    }
-}
-
 pub struct CustomMaterialPlugin;
 
 impl Plugin for CustomMaterialPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugin(ExtractComponentPlugin::<InstanceMaterialData>::default())
-            .add_plugin(ExtractComponentPlugin::<ViewMat>::default())
-            .add_plugin(ExtractComponentPlugin::<ProjectionMat>::default())
             .add_plugin(ExtractComponentPlugin::<BaseColorTexture>::default())
             .add_plugin(ExtractComponentPlugin::<OffsetUniform>::default())
             .add_plugin(ExtractComponentPlugin::<MixColorTexture>::default());
@@ -126,9 +101,17 @@ impl Plugin for CustomMaterialPlugin {
         app.sub_app_mut(RenderApp)
             .add_render_command::<Transparent3d, DrawCustom>()
             .init_resource::<CustomMaterialPipeline>()
+            .init_resource::<CustomCamera>()
             .init_resource::<SpecializedMeshPipelines<CustomMaterialPipeline>>()
+            .add_system_to_stage(RenderStage::Extract, extract_custom_camera)
             .add_system_to_stage(RenderStage::Queue, queue_custom_material)
             .add_system_to_stage(RenderStage::Prepare, prepare_buffers);
+    }
+}
+
+fn extract_custom_camera(mut commands: Commands, world: Res<MainWorld>) {
+    if let Some(camera) = world.get_resource::<CustomCamera>() {
+        commands.insert_resource(camera.clone());
     }
 }
 
@@ -188,14 +171,13 @@ fn prepare_buffers(
         &OffsetUniform,
         &BaseColorTexture,
         &MixColorTexture,
-        &ViewMat,
-        &ProjectionMat,
     )>,
+    camera: Res<CustomCamera>,
     render_device: Res<RenderDevice>,
     pipeline: Res<CustomMaterialPipeline>,
     images: Res<RenderAssets<Image>>,
 ) {
-    for (entity, instance_data, offset, base_tex, mix_tex, view, proj) in &query {
+    for (entity, instance_data, offset, base_tex, mix_tex) in &query {
         let instance_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("instance data buffer"),
             contents: bytemuck::cast_slice(instance_data.as_slice()),
@@ -241,11 +223,11 @@ fn prepare_buffers(
         let view_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("view mat buffer"),
             usage: BufferUsages::COPY_DST | BufferUsages::UNIFORM,
-            contents: bytemuck::cast_slice(&[**view]),
+            contents: bytemuck::cast_slice(&[camera.get_view()]),
         });
         let proj_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("proj mat buffer"),
-            contents: bytemuck::cast_slice(&[**proj]),
+            contents: bytemuck::cast_slice(&[camera.get_proj()]),
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
         });
         let offset_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
@@ -518,262 +500,3 @@ impl<const I: usize> EntityRenderCommand for SetUniformsBindGroup<I> {
         RenderCommandResult::Success
     }
 }
-
-//impl AsBindGroup for CustomMesh {
-//type Data = ();
-
-//fn as_bind_group(
-//&self,
-//layout: &BindGroupLayout,
-//render_device: &RenderDevice,
-//images: &RenderAssets<Image>,
-//_fallback_image: &FallbackImage,
-//) -> Result<PreparedBindGroup<Self>, AsBindGroupError> {
-//// Base color texture
-//let base_color_texture = self
-//.base_color_texture
-//.as_ref()
-//.ok_or(AsBindGroupError::RetryNextUpdate)?;
-//let image = images
-//.get(base_color_texture)
-//.ok_or(AsBindGroupError::RetryNextUpdate)?;
-
-//// Mix color texture
-//let mix_color_texture = self
-//.mix_color_texture
-//.as_ref()
-//.ok_or(AsBindGroupError::RetryNextUpdate)?;
-//let image2 = images
-//.get(mix_color_texture)
-//.ok_or(AsBindGroupError::RetryNextUpdate)?;
-
-//let mut color_buffer = UniformBuffer::new(Vec::new());
-//color_buffer.write(&self.color).unwrap();
-//let mut offset_buffer = UniformBuffer::new(Vec::new());
-//offset_buffer.write(&self.offset).unwrap();
-//let mut model_buffer = UniformBuffer::new(Vec::new());
-//model_buffer.write(&self.model).unwrap();
-//let mut view_buffer = UniformBuffer::new(Vec::new());
-//view_buffer.write(&self.view).unwrap();
-//let mut projection_buffer = UniformBuffer::new(Vec::new());
-//projection_buffer.write(&self.projection).unwrap();
-
-//let bindings = vec![
-//OwnedBindingResource::Buffer(render_device.create_buffer_with_data(
-//&BufferInitDescriptor {
-//label: None,
-//usage: BufferUsages::COPY_DST | BufferUsages::UNIFORM,
-//contents: color_buffer.as_ref(),
-//},
-//)),
-//OwnedBindingResource::Buffer(render_device.create_buffer_with_data(
-//&BufferInitDescriptor {
-//label: None,
-//usage: BufferUsages::COPY_DST | BufferUsages::UNIFORM,
-//contents: offset_buffer.as_ref(),
-//},
-//)),
-//OwnedBindingResource::Buffer(render_device.create_buffer_with_data(
-//&BufferInitDescriptor {
-//label: None,
-//usage: BufferUsages::COPY_DST | BufferUsages::UNIFORM,
-//contents: model_buffer.as_ref(),
-//},
-//)),
-//OwnedBindingResource::Buffer(render_device.create_buffer_with_data(
-//&BufferInitDescriptor {
-//label: None,
-//usage: BufferUsages::COPY_DST | BufferUsages::UNIFORM,
-//contents: view_buffer.as_ref(),
-//},
-//)),
-//OwnedBindingResource::Buffer(render_device.create_buffer_with_data(
-//&BufferInitDescriptor {
-//label: None,
-//usage: BufferUsages::COPY_DST | BufferUsages::UNIFORM,
-//contents: projection_buffer.as_ref(),
-//},
-//)),
-//OwnedBindingResource::TextureView(image.texture_view.clone()),
-//OwnedBindingResource::Sampler(image.sampler.clone()),
-//OwnedBindingResource::TextureView(image2.texture_view.clone()),
-//OwnedBindingResource::Sampler(image2.sampler.clone()),
-//];
-
-//let bind_group = render_device.create_bind_group(&BindGroupDescriptor {
-//entries: &[
-//BindGroupEntry {
-//binding: 0,
-//resource: bindings[0].get_binding(),
-//},
-//BindGroupEntry {
-//binding: 1,
-//resource: bindings[1].get_binding(),
-//},
-//BindGroupEntry {
-//binding: 2,
-//resource: bindings[2].get_binding(),
-//},
-//BindGroupEntry {
-//binding: 3,
-//resource: bindings[3].get_binding(),
-//},
-//BindGroupEntry {
-//binding: 4,
-//resource: bindings[4].get_binding(),
-//},
-//BindGroupEntry {
-//binding: 5,
-//resource: BindingResource::TextureView(&image.texture_view),
-//},
-//BindGroupEntry {
-//binding: 6,
-//resource: BindingResource::Sampler(&image.sampler),
-//},
-//BindGroupEntry {
-//binding: 7,
-//resource: BindingResource::TextureView(&image2.texture_view),
-//},
-//BindGroupEntry {
-//binding: 8,
-//resource: BindingResource::Sampler(&image2.sampler),
-//},
-//],
-//label: Some("custom_mesh_bind_group"),
-//layout,
-//});
-
-//Ok(PreparedBindGroup {
-//bind_group,
-//bindings,
-//data: (),
-//})
-//}
-
-//fn bind_group_layout(render_device: &RenderDevice) -> BindGroupLayout {
-//render_device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-//label: Some("Custom Mesh Bind Group Layout"),
-//entries: &[
-//BindGroupLayoutEntry {
-//binding: 0,
-//visibility: ShaderStages::VERTEX_FRAGMENT,
-//ty: BindingType::Buffer {
-//ty: BufferBindingType::Uniform,
-//has_dynamic_offset: false,
-//min_binding_size: BufferSize::new(std::mem::size_of::<Vec4>() as u64),
-//},
-//count: None,
-//},
-//BindGroupLayoutEntry {
-//binding: 1,
-//visibility: ShaderStages::VERTEX_FRAGMENT,
-//ty: BindingType::Buffer {
-//ty: BufferBindingType::Uniform,
-//has_dynamic_offset: false,
-//min_binding_size: BufferSize::new(std::mem::size_of::<f32>() as u64),
-//},
-//count: None,
-//},
-//BindGroupLayoutEntry {
-//binding: 2,
-//visibility: ShaderStages::VERTEX_FRAGMENT,
-//ty: BindingType::Buffer {
-//ty: BufferBindingType::Uniform,
-//has_dynamic_offset: false,
-//min_binding_size: BufferSize::new(std::mem::size_of::<Mat4>() as u64),
-//},
-//count: None,
-//},
-//BindGroupLayoutEntry {
-//binding: 3,
-//visibility: ShaderStages::VERTEX_FRAGMENT,
-//ty: BindingType::Buffer {
-//ty: BufferBindingType::Uniform,
-//has_dynamic_offset: false,
-//min_binding_size: BufferSize::new(std::mem::size_of::<Mat4>() as u64),
-//},
-//count: None,
-//},
-//BindGroupLayoutEntry {
-//binding: 4,
-//visibility: ShaderStages::VERTEX_FRAGMENT,
-//ty: BindingType::Buffer {
-//ty: BufferBindingType::Uniform,
-//has_dynamic_offset: false,
-//min_binding_size: BufferSize::new(std::mem::size_of::<Mat4>() as u64),
-//},
-//count: None,
-//},
-//BindGroupLayoutEntry {
-//binding: 5,
-//visibility: ShaderStages::VERTEX_FRAGMENT,
-//ty: BindingType::Texture {
-//multisampled: false,
-//sample_type: TextureSampleType::Float { filterable: true },
-//view_dimension: TextureViewDimension::D2,
-//},
-//count: None,
-//},
-//BindGroupLayoutEntry {
-//binding: 6,
-//visibility: ShaderStages::VERTEX_FRAGMENT,
-//ty: BindingType::Sampler(SamplerBindingType::Filtering),
-//count: None,
-//},
-//BindGroupLayoutEntry {
-//binding: 7,
-//visibility: ShaderStages::VERTEX_FRAGMENT,
-//ty: BindingType::Texture {
-//multisampled: false,
-//sample_type: TextureSampleType::Float { filterable: true },
-//view_dimension: TextureViewDimension::D2,
-//},
-//count: None,
-//},
-//BindGroupLayoutEntry {
-//binding: 8,
-//visibility: ShaderStages::VERTEX_FRAGMENT,
-//ty: BindingType::Sampler(SamplerBindingType::Filtering),
-//count: None,
-//},
-//],
-//})
-//}
-//}
-
-//impl Material for CustomMesh {
-//fn vertex_shader() -> ShaderRef {
-//"shaders/custom_mesh.wgsl".into()
-//}
-
-//fn fragment_shader() -> ShaderRef {
-//"shaders/custom_mesh.wgsl".into()
-//}
-
-//fn specialize(
-//_pipeline: &MaterialPipeline<Self>,
-//descriptor: &mut RenderPipelineDescriptor,
-//_layout: &MeshVertexBufferLayout,
-//key: MaterialPipelineKey<Self>,
-//) -> Result<(), SpecializedMeshPipelineError> {
-//descriptor.label = Some("Custom Mesh pipeline descriptor".into());
-//descriptor.primitive = PrimitiveState {
-//front_face: FrontFace::Cw,
-//cull_mode: None,
-//unclipped_depth: false,
-//polygon_mode: PolygonMode::Fill,
-//conservative: false,
-//topology: key.mesh_key.primitive_topology(),
-//strip_index_format: None,
-//};
-//descriptor.depth_stencil = Some(DepthStencilState {
-//format: TextureFormat::Depth32Float,
-//depth_write_enabled: true,
-//depth_compare: CompareFunction::Less,
-//stencil: StencilState::default(),
-//bias: DepthBiasState::default(),
-//});
-
-//Ok(())
-//}
-//}

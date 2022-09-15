@@ -1,4 +1,7 @@
+mod camera;
 mod custom_material;
+
+use camera::*;
 use custom_material::*;
 
 use bevy::{
@@ -56,6 +59,7 @@ fn main() {
         .insert_resource(TextureShaderResources(None))
         .add_plugins(DefaultPlugins)
         .add_plugin(CustomMaterialPlugin)
+        .add_plugin(CameraPlugin)
         .add_state(AppState::LoadAssets)
         .add_system_set(SystemSet::on_enter(AppState::LoadAssets).with_system(load_assets))
         .add_system_set(SystemSet::on_update(AppState::LoadAssets).with_system(assets_loaded))
@@ -71,10 +75,10 @@ fn update_offset(mut query: Query<&mut OffsetUniform>, input: Res<Input<KeyCode>
         return;
     }
     let mut offset_uniform = query.get_single_mut().unwrap();
-    if input.just_pressed(KeyCode::W) {
+    if input.just_pressed(KeyCode::Q) {
         **offset_uniform += 0.1;
     }
-    if input.just_pressed(KeyCode::S) {
+    if input.just_pressed(KeyCode::E) {
         **offset_uniform -= 0.1;
     }
 }
@@ -124,7 +128,12 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
     textures: ResMut<TextureShaderResources>,
+    mut windows: ResMut<Windows>,
 ) {
+    let window = windows.get_primary_mut().unwrap();
+    window.set_cursor_lock_mode(true);
+    window.set_cursor_visibility(false);
+
     match &**textures {
         Some(textures) => {
             // Base color texture
@@ -286,9 +295,6 @@ fn setup(
             //let indices = vec![0, 1, 3, 1, 2, 3];
             //mesh.set_indices(Some(Indices::U16(indices)));
 
-            let view = Mat4::from_translation(Vec3::new(0.0, 0.0, -3.0));
-            let projection = Mat4::perspective_rh(45.0_f32.to_radians(), 800.0 / 600.0, 0.1, 100.0);
-
             commands
                 .spawn()
                 .insert_bundle((
@@ -304,8 +310,6 @@ fn setup(
                     OffsetUniform(0.1),
                     BaseColorTexture(textures[0].clone()),
                     MixColorTexture(textures[1].clone()),
-                    ViewMat(view),
-                    ProjectionMat(projection),
                     // NOTE: Frustum culling is done based on the Aabb of the Mesh and the GlobalTransform.
                     // As the cube is at the origin, if its Aabb moves outside the view frustum, all the
                     // instanced cubes will be culled.
@@ -316,6 +320,17 @@ fn setup(
                     NoFrustumCulling,
                 ))
                 .insert_bundle(SpatialBundle::default());
+
+            commands.insert_resource(CustomCamera {
+                position: Vec3::new(0.0, 0.0, 3.0),
+                yaw: (-90.0_f32).to_radians(),
+                pitch: 0.0_f32.to_radians(),
+                up: Vec3::Y,
+                fov: 45.0,
+                aspect_ratio: 800.0 / 600.0,
+                near: 0.1,
+                far: 100.0,
+            });
         }
         None => {}
     };
