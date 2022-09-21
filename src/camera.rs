@@ -22,11 +22,7 @@ impl CameraPlugin {
         input: Res<Input<KeyCode>>,
         time: Res<Time>,
     ) {
-        // Multiply this to the time it takes for a frame to be rendered (tick)
-        // so that we have a consistent speed regardless of the hardware performance.
-        // When we have a large delta seconds for a frame, the velocity of that frame
-        // will also be a bit higher to balance it out.
-        let camera_speed: f32 = 2.5 * time.delta_seconds();
+        let camera_speed: f32 = 2.5;
         let mut translation = Vec3::ZERO;
         let camera_right = camera.right();
 
@@ -43,33 +39,36 @@ impl CameraPlugin {
             translation += camera_right * camera_speed;
         }
 
-        camera.translate(translation);
+        if translation != Vec3::ZERO {
+            camera.translate(translation * time.delta_seconds());
+        }
     }
 
-    fn camera_look_system(
+    pub fn camera_look_system(
         mut camera: ResMut<CustomCamera>,
         mut mouse_motion: EventReader<MouseMotion>,
         time: Res<Time>,
     ) {
-        let sensitivity: f32 = 2.0;
+        let look_sensitivity: f32 = 0.1;
+        let mut rotation_offset = Vec2::ZERO;
 
         for event in mouse_motion.iter() {
-            camera.rotate(
-                event.delta.x.to_radians() * sensitivity * time.delta_seconds(),
-                -event.delta.y.to_radians() * sensitivity * time.delta_seconds(),
-            );
+            rotation_offset += event.delta * look_sensitivity * time.delta_seconds();
+        }
+
+        if rotation_offset != Vec2::ZERO {
+            camera.rotate(rotation_offset.x, -rotation_offset.y);
         }
     }
 
     fn camera_zoom_system(
         mut camera: ResMut<CustomCamera>,
         mut mouse_wheel: EventReader<MouseWheel>,
-        time: Res<Time>,
     ) {
-        let sensitivity: f32 = 100.0;
+        let sensitivity: f32 = 1.0;
 
         for event in mouse_wheel.iter() {
-            camera.zoom(event.y * sensitivity * time.delta_seconds());
+            camera.zoom(event.y * sensitivity);
         }
     }
 }
@@ -116,15 +115,14 @@ impl CustomCamera {
         self.pitch += pitch;
     }
 
-    pub fn right(&self) -> Vec3 {
-        self.get_direction().cross(self.up).normalize()
-    }
-
-    pub fn translate(&mut self, translation: Vec3) {
-        self.position += translation;
-
+    pub fn translate(&mut self, position: Vec3) {
+        self.position += position;
         // Uncomment this to keep the "player" on the ground - FPS camera
         // self.position.y = 0.0;
+    }
+
+    pub fn right(&self) -> Vec3 {
+        self.get_direction().cross(self.up).normalize()
     }
 
     pub fn zoom(&mut self, amount: f32) {
