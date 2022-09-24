@@ -1,23 +1,28 @@
 mod camera;
 mod custom_material;
+mod light_material;
 
 use camera::*;
 use custom_material::*;
+use light_material::*;
 
 use bevy::{
     asset::LoadState,
+    core_pipeline::clear_color::ClearColorConfig,
     prelude::*,
     render::{
-        mesh::MeshVertexAttribute,
+        extract_component::{ExtractComponent, ExtractComponentPlugin},
         render_resource::{
             AddressMode, Extent3d, FilterMode, PrimitiveTopology, SamplerDescriptor,
-            TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, VertexFormat,
+            TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
         },
         texture::ImageSampler,
         view::NoFrustumCulling,
+        MainWorld, RenderApp, RenderStage,
     },
     window::close_on_esc,
 };
+use bytemuck::{Pod, Zeroable};
 
 #[derive(Deref, DerefMut, Debug)]
 pub struct TextureShaderResources(Option<Vec<Handle<Image>>>);
@@ -28,71 +33,220 @@ enum AppState {
     Main,
 }
 
-const CUBE_POS: [Vec3; 10] = [
-    Vec3::new(0.0, 0.0, 0.0),
-    Vec3::new(2.0, 5.0, -15.0),
-    Vec3::new(-1.5, -2.2, -2.5),
-    Vec3::new(-3.8, -2.0, -12.3),
-    Vec3::new(2.4, -0.4, -3.5),
-    Vec3::new(-1.7, 3.0, -7.5),
-    Vec3::new(1.3, -2.0, -2.5),
-    Vec3::new(1.5, 2.0, -2.5),
-    Vec3::new(1.5, 0.2, -1.5),
-    Vec3::new(-1.3, 1.0, -1.5),
+#[derive(Component, Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct InstanceData {
+    pub position: Vec3,
+}
+
+#[derive(Component, Deref, DerefMut, Debug)]
+pub struct InstanceMaterialData(pub Vec<InstanceData>);
+
+impl ExtractComponent for InstanceMaterialData {
+    type Query = &'static InstanceMaterialData;
+    type Filter = ();
+
+    fn extract_component(item: bevy::ecs::query::QueryItem<Self::Query>) -> Self {
+        InstanceMaterialData(item.0.clone())
+    }
+}
+
+#[derive(Component, Deref, Debug)]
+struct BaseColorTexture(pub Handle<Image>);
+
+impl ExtractComponent for BaseColorTexture {
+    type Query = &'static BaseColorTexture;
+    type Filter = ();
+
+    fn extract_component(item: bevy::ecs::query::QueryItem<Self::Query>) -> Self {
+        BaseColorTexture((**item).clone())
+    }
+}
+
+#[derive(Component, Deref, Debug)]
+struct MixColorTexture(pub Handle<Image>);
+
+impl ExtractComponent for MixColorTexture {
+    type Query = &'static MixColorTexture;
+    type Filter = ();
+
+    fn extract_component(item: bevy::ecs::query::QueryItem<Self::Query>) -> Self {
+        MixColorTexture((**item).clone())
+    }
+}
+
+const CUBE: [[f32; 3]; 36] = [
+    // Face 1
+    [-0.5, -0.5, -0.5],
+    [0.5, -0.5, -0.5],
+    [0.5, 0.5, -0.5],
+    [0.5, 0.5, -0.5],
+    [-0.5, 0.5, -0.5],
+    [-0.5, -0.5, -0.5],
+    // Face 2
+    [-0.5, -0.5, 0.5],
+    [0.5, -0.5, 0.5],
+    [0.5, 0.5, 0.5],
+    [0.5, 0.5, 0.5],
+    [-0.5, 0.5, 0.5],
+    [-0.5, -0.5, 0.5],
+    // Face 3
+    [-0.5, 0.5, 0.5],
+    [-0.5, 0.5, -0.5],
+    [-0.5, -0.5, -0.5],
+    [-0.5, -0.5, -0.5],
+    [-0.5, -0.5, 0.5],
+    [-0.5, 0.5, 0.5],
+    // Face 4
+    [0.5, 0.5, 0.5],
+    [0.5, 0.5, -0.5],
+    [0.5, -0.5, -0.5],
+    [0.5, -0.5, -0.5],
+    [0.5, -0.5, 0.5],
+    [0.5, 0.5, 0.5],
+    // Face 5
+    [-0.5, -0.5, -0.5],
+    [0.5, -0.5, -0.5],
+    [0.5, -0.5, 0.5],
+    [0.5, -0.5, 0.5],
+    [-0.5, -0.5, 0.5],
+    [-0.5, -0.5, -0.5],
+    // Face 6
+    [-0.5, 0.5, -0.5],
+    [0.5, 0.5, -0.5],
+    [0.5, 0.5, 0.5],
+    [0.5, 0.5, 0.5],
+    [-0.5, 0.5, 0.5],
+    [-0.5, 0.5, -0.5],
+];
+
+const CUBE_UV: [[f32; 2]; 36] = [
+    // Face 1
+    [0.0, 0.0],
+    [1.0, 0.0],
+    [1.0, 1.0],
+    [1.0, 1.0],
+    [0.0, 1.0],
+    [0.0, 0.0],
+    // Face 2
+    [0.0, 0.0],
+    [1.0, 0.0],
+    [1.0, 1.0],
+    [1.0, 1.0],
+    [0.0, 1.0],
+    [0.0, 0.0],
+    // Face 3
+    [1.0, 0.0],
+    [1.0, 1.0],
+    [0.0, 1.0],
+    [0.0, 1.0],
+    [0.0, 0.0],
+    [1.0, 0.0],
+    // Face 4
+    [1.0, 0.0],
+    [1.0, 1.0],
+    [0.0, 1.0],
+    [0.0, 1.0],
+    [0.0, 0.0],
+    [1.0, 0.0],
+    // Face 5
+    [0.0, 1.0],
+    [1.0, 1.0],
+    [1.0, 0.0],
+    [1.0, 0.0],
+    [0.0, 0.0],
+    [0.0, 1.0],
+    // Face 6
+    [0.0, 1.0],
+    [1.0, 1.0],
+    [1.0, 0.0],
+    [1.0, 0.0],
+    [0.0, 0.0],
+    [0.0, 1.0],
+];
+
+const CUBE_NORMALS: [[f32; 3]; 36] = [
+    // Face 1
+    [0.0, 0.0, -1.0],
+    [0.0, 0.0, -1.0],
+    [0.0, 0.0, -1.0],
+    [0.0, 0.0, -1.0],
+    [0.0, 0.0, -1.0],
+    [0.0, 0.0, -1.0],
+    // Face 2
+    [0.0, 0.0, 1.0],
+    [0.0, 0.0, 1.0],
+    [0.0, 0.0, 1.0],
+    [0.0, 0.0, 1.0],
+    [0.0, 0.0, 1.0],
+    [0.0, 0.0, 1.0],
+    // Face 3
+    [-1.0, 0.0, 0.0],
+    [-1.0, 0.0, 0.0],
+    [-1.0, 0.0, 0.0],
+    [-1.0, 0.0, 0.0],
+    [-1.0, 0.0, 0.0],
+    [-1.0, 0.0, 0.0],
+    // Face 4
+    [1.0, 0.0, 0.0],
+    [1.0, 0.0, 0.0],
+    [1.0, 0.0, 0.0],
+    [1.0, 0.0, 0.0],
+    [1.0, 0.0, 0.0],
+    [1.0, 0.0, 0.0],
+    // Face 5
+    [0.0, -1.0, 0.0],
+    [0.0, -1.0, 0.0],
+    [0.0, -1.0, 0.0],
+    [0.0, -1.0, 0.0],
+    [0.0, -1.0, 0.0],
+    [0.0, -1.0, 0.0],
+    // Face 6
+    [0.0, 1.0, 0.0],
+    [0.0, 1.0, 0.0],
+    [0.0, 1.0, 0.0],
+    [0.0, 1.0, 0.0],
+    [0.0, 1.0, 0.0],
+    [0.0, 1.0, 0.0],
 ];
 
 fn main() {
-    App::new()
-        .insert_resource(WindowDescriptor {
-            width: 800.,
-            height: 600.,
-            ..default()
-        })
-        //.insert_resource(ImageSettings {
-        //default_sampler: SamplerDescriptor {
-        //address_mode_u: AddressMode::Repeat,
-        //address_mode_v: AddressMode::Repeat,
-        //address_mode_w: AddressMode::Repeat,
-        //..default()
-        //},
-        //})
-        .insert_resource(TextureShaderResources(None))
-        .add_plugins(DefaultPlugins)
-        .add_plugin(CustomMaterialPlugin)
-        .add_plugin(CameraPlugin)
-        .add_state(AppState::LoadAssets)
-        .add_system_set(SystemSet::on_enter(AppState::LoadAssets).with_system(load_assets))
-        .add_system_set(SystemSet::on_update(AppState::LoadAssets).with_system(assets_loaded))
-        .add_system_set(SystemSet::on_enter(AppState::Main).with_system(setup))
-        .add_system_set(SystemSet::on_update(AppState::Main).with_system(update_offset))
-        .add_system_set(SystemSet::on_update(AppState::Main).with_system(update_model_mat))
-        .add_system(close_on_esc)
-        .run();
-}
+    let mut app = App::new();
 
-fn update_offset(mut query: Query<&mut OffsetUniform>, input: Res<Input<KeyCode>>) {
-    if query.is_empty() {
-        return;
-    }
-    let mut offset_uniform = query.get_single_mut().unwrap();
-    if input.just_pressed(KeyCode::Q) {
-        **offset_uniform += 0.1;
-    }
-    if input.just_pressed(KeyCode::E) {
-        **offset_uniform -= 0.1;
-    }
-}
+    app.insert_resource(WindowDescriptor {
+        width: 800.,
+        height: 600.,
+        ..default()
+    })
+    //.insert_resource(ImageSettings {
+    //default_sampler: SamplerDescriptor {
+    //address_mode_u: AddressMode::Repeat,
+    //address_mode_v: AddressMode::Repeat,
+    //address_mode_w: AddressMode::Repeat,
+    //..default()
+    //},
+    //})
+    .insert_resource(TextureShaderResources(None))
+    .add_plugins(DefaultPlugins)
+    .add_plugin(ExtractComponentPlugin::<InstanceMaterialData>::default())
+    .add_plugin(ExtractComponentPlugin::<BaseColorTexture>::default())
+    .add_plugin(ExtractComponentPlugin::<ColorUniform>::default())
+    .add_plugin(ExtractComponentPlugin::<MixColorTexture>::default())
+    .add_plugin(LightMaterialPlugin)
+    .add_plugin(CustomMaterialPlugin)
+    .add_plugin(CameraPlugin)
+    .add_state(AppState::LoadAssets)
+    .add_system_set(SystemSet::on_enter(AppState::LoadAssets).with_system(load_assets))
+    .add_system_set(SystemSet::on_update(AppState::LoadAssets).with_system(assets_loaded))
+    .add_system_set(SystemSet::on_enter(AppState::Main).with_system(setup))
+    .add_system_set(SystemSet::on_update(AppState::Main).with_system(move_light))
+    .add_system(close_on_esc);
 
-fn update_model_mat(mut query: Query<&mut InstanceMaterialData>, time: Res<Time>) {
-    if query.is_empty() {
-        return;
-    }
-    let mut instance_material_data = query.get_single_mut().unwrap();
-    for (i, instance_data) in (**instance_material_data).iter_mut().enumerate().step_by(3) {
-        instance_data.model = Mat4::from_translation(CUBE_POS[i])
-            * Mat4::from_rotation_y((time.seconds_since_startup() as f32) * 50.0_f32.to_radians())
-            * Mat4::from_rotation_x(25.0_f32.to_radians());
-    }
+    app.sub_app_mut(RenderApp)
+        .init_resource::<CustomCamera>()
+        .add_system_to_stage(RenderStage::Extract, extract_custom_camera);
+
+    app.run();
 }
 
 fn load_assets(
@@ -123,6 +277,18 @@ fn assets_loaded(
     }
 }
 
+fn extract_custom_camera(mut commands: Commands, world: Res<MainWorld>) {
+    if let Some(camera) = world.get_resource::<CustomCamera>() {
+        commands.insert_resource(camera.clone());
+    }
+}
+
+fn move_light(mut query: Query<&mut InstanceMaterialData, With<LightMaterial>>, time: Res<Time>) {
+    for mut light_instance_data in &mut query {
+        light_instance_data[0].position.x = time.seconds_since_startup().sin() as f32;
+    }
+}
+
 fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -133,6 +299,56 @@ fn setup(
     let window = windows.get_primary_mut().unwrap();
     window.set_cursor_lock_mode(true);
     window.set_cursor_visibility(false);
+
+    // This is just used so that we can see something through bevy, there's another camera created
+    // using model, view, projection matrices
+    commands.spawn_bundle(Camera3dBundle {
+        camera_3d: Camera3d {
+            // This is 0.0 by default because 0.0 is the far plane due to bevy's use of reverse-z projections.
+            // This goes hand in hand with the DepthStencilState depth_compare
+            // If it's Less the load op needs to be 1.0
+            // If it's Greater the load op needs to be 0.0
+            // TODO: figure out why???
+            depth_load_op: bevy::core_pipeline::core_3d::Camera3dDepthLoadOp::Clear(1.0),
+            clear_color: ClearColorConfig::Custom(Color::BLACK),
+        },
+        ..default()
+    });
+
+    commands.insert_resource(CustomCamera {
+        position: Vec3::new(0.0, 0.0, 3.0),
+        yaw: (-90.0_f32).to_radians(),
+        pitch: 0.0_f32.to_radians(),
+        up: Vec3::Y,
+        fov: 45.0,
+        aspect_ratio: 800.0 / 600.0,
+        near: 0.1,
+        far: 100.0,
+    });
+
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, CUBE.to_vec());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, CUBE_NORMALS.to_vec());
+    // Set the color attribute this is needed otherwise there's a missing Vertex Normal attribute
+    // error
+    //let v_color: Vec<u32> = vec![Color::WHITE.as_linear_rgba_u32(); 36];
+    //mesh.insert_attribute(
+    //MeshVertexAttribute::new("Vertex_Color", 1, VertexFormat::Uint32),
+    //v_color,
+    //);
+
+    commands
+        .spawn()
+        .insert_bundle((
+            meshes.add(mesh),
+            InstanceMaterialData(vec![InstanceData {
+                position: Vec3::new(0.0, 1.0, 2.0),
+            }]),
+            ColorUniform(Color::WHITE.as_rgba_f32()),
+            LightMaterial,
+            NoFrustumCulling,
+        ))
+        .insert_bundle(SpatialBundle::default());
 
     match &**textures {
         Some(textures) => {
@@ -189,107 +405,9 @@ fn setup(
             });
 
             let mut mesh = Mesh::new(PrimitiveTopology::TriangleList);
-
-            // Set the position attribute
-            let v_pos = vec![
-                // Face 1
-                [-0.5, -0.5, -0.5],
-                [0.5, -0.5, -0.5],
-                [0.5, 0.5, -0.5],
-                [0.5, 0.5, -0.5],
-                [-0.5, 0.5, -0.5],
-                [-0.5, -0.5, -0.5],
-                // Face 2
-                [-0.5, -0.5, 0.5],
-                [0.5, -0.5, 0.5],
-                [0.5, 0.5, 0.5],
-                [0.5, 0.5, 0.5],
-                [-0.5, 0.5, 0.5],
-                [-0.5, -0.5, 0.5],
-                // Face 3
-                [-0.5, 0.5, 0.5],
-                [-0.5, 0.5, -0.5],
-                [-0.5, -0.5, -0.5],
-                [-0.5, -0.5, -0.5],
-                [-0.5, -0.5, 0.5],
-                [-0.5, 0.5, 0.5],
-                // Face 4
-                [0.5, 0.5, 0.5],
-                [0.5, 0.5, -0.5],
-                [0.5, -0.5, -0.5],
-                [0.5, -0.5, -0.5],
-                [0.5, -0.5, 0.5],
-                [0.5, 0.5, 0.5],
-                // Face 5
-                [-0.5, -0.5, -0.5],
-                [0.5, -0.5, -0.5],
-                [0.5, -0.5, 0.5],
-                [0.5, -0.5, 0.5],
-                [-0.5, -0.5, 0.5],
-                [-0.5, -0.5, -0.5],
-                // Face 6
-                [-0.5, 0.5, -0.5],
-                [0.5, 0.5, -0.5],
-                [0.5, 0.5, 0.5],
-                [0.5, 0.5, 0.5],
-                [-0.5, 0.5, 0.5],
-                [-0.5, 0.5, -0.5],
-            ];
-
-            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, v_pos);
-
-            let v_uv = vec![
-                // Face 1
-                [0.0, 0.0],
-                [1.0, 0.0],
-                [1.0, 1.0],
-                [1.0, 1.0],
-                [0.0, 1.0],
-                [0.0, 0.0],
-                // Face 2
-                [0.0, 0.0],
-                [1.0, 0.0],
-                [1.0, 1.0],
-                [1.0, 1.0],
-                [0.0, 1.0],
-                [0.0, 0.0],
-                // Face 3
-                [1.0, 0.0],
-                [1.0, 1.0],
-                [0.0, 1.0],
-                [0.0, 1.0],
-                [0.0, 0.0],
-                [1.0, 0.0],
-                // Face 4
-                [1.0, 0.0],
-                [1.0, 1.0],
-                [0.0, 1.0],
-                [0.0, 1.0],
-                [0.0, 0.0],
-                [1.0, 0.0],
-                // Face 5
-                [0.0, 1.0],
-                [1.0, 1.0],
-                [1.0, 0.0],
-                [1.0, 0.0],
-                [0.0, 0.0],
-                [0.0, 1.0],
-                // Face 6
-                [0.0, 1.0],
-                [1.0, 1.0],
-                [1.0, 0.0],
-                [1.0, 0.0],
-                [0.0, 0.0],
-                [0.0, 1.0],
-            ];
-            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, v_uv);
-
-            // Set the color attribute
-            let v_color: Vec<u32> = vec![Color::RED.as_linear_rgba_u32(); 36];
-            mesh.insert_attribute(
-                MeshVertexAttribute::new("Vertex_Color", 1, VertexFormat::Uint32),
-                v_color,
-            );
+            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, CUBE.to_vec());
+            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, CUBE_UV.to_vec());
+            mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, CUBE_NORMALS.to_vec());
 
             // Set vertex indices
             //let indices = vec![0, 1, 3, 1, 2, 3];
@@ -298,18 +416,14 @@ fn setup(
             commands
                 .spawn()
                 .insert_bundle((
-                    meshes.add(mesh.clone()),
-                    InstanceMaterialData(
-                        (1..=CUBE_POS.len())
-                            .map(|i| InstanceData {
-                                model: Mat4::from_translation(CUBE_POS[i - 1])
-                                    * Mat4::from_rotation_x((20.0_f32 * i as f32).to_radians()),
-                            })
-                            .collect(),
-                    ),
-                    OffsetUniform(0.1),
+                    meshes.add(mesh),
+                    InstanceMaterialData(vec![InstanceData {
+                        position: Vec3::new(0.0, 0.0, 0.0),
+                    }]),
+                    ColorUniform(Color::CRIMSON.as_rgba_f32()),
                     BaseColorTexture(textures[0].clone()),
                     MixColorTexture(textures[1].clone()),
+                    CustomMaterial,
                     // NOTE: Frustum culling is done based on the Aabb of the Mesh and the GlobalTransform.
                     // As the cube is at the origin, if its Aabb moves outside the view frustum, all the
                     // instanced cubes will be culled.
@@ -320,33 +434,7 @@ fn setup(
                     NoFrustumCulling,
                 ))
                 .insert_bundle(SpatialBundle::default());
-
-            commands.insert_resource(CustomCamera {
-                position: Vec3::new(0.0, 0.0, 3.0),
-                yaw: (-90.0_f32).to_radians(),
-                pitch: 0.0_f32.to_radians(),
-                up: Vec3::Y,
-                fov: 45.0,
-                aspect_ratio: 800.0 / 600.0,
-                near: 0.1,
-                far: 100.0,
-            });
         }
         None => {}
     };
-
-    // This is just used so that we can see something, there's basically another camera created
-    // using model, view, projection matrices
-    commands.spawn_bundle(Camera3dBundle {
-        camera_3d: Camera3d {
-            // This is 0.0 by default because 0.0 is the far plane due to bevy's use of reverse-z projections.
-            // This goes hand in hand with the DepthStencilState depth_compare
-            // If it's Less the load op needs to be 1.0
-            // If it's Greater the load op needs to be 0.0
-            // TODO: figure out why???
-            depth_load_op: bevy::core_pipeline::core_3d::Camera3dDepthLoadOp::Clear(1.0),
-            ..default()
-        },
-        ..default()
-    });
 }
