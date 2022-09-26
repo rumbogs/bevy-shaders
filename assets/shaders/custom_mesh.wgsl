@@ -9,10 +9,10 @@ var<uniform> view_mat: mat4x4<f32>;
 var<uniform> projection_mat: mat4x4<f32>;
 
 @group(2) @binding(2)
-var base_tex: texture_2d<f32>;
+var diff_tex: texture_2d<f32>;
 
 @group(2) @binding(3)
-var base_tex_sampler: sampler;
+var diff_tex_sampler: sampler;
 
 @group(2) @binding(4)
 var mix_tex: texture_2d<f32>;
@@ -41,11 +41,9 @@ struct InstanceInput {
     @location(7) normal_mat_0: vec4<f32>,
     @location(8) normal_mat_1: vec4<f32>,
     @location(9) normal_mat_2: vec4<f32>,
-    @location(10) normal_mat_3: vec3<f32>,
-    @location(11) ambient: vec4<f32>,
-    @location(12) diffuse: vec4<f32>,
-    @location(13) specular: vec4<f32>,
-    @location(14) shininess: f32,
+    @location(10) normal_mat_3: vec4<f32>,
+    @location(11) specular: vec4<f32>,
+    @location(12) shininess: f32,
 }
 
 // NOTE: Bindings must come before functions that use them!
@@ -65,10 +63,8 @@ struct VertexOutput {
     @location(1) position: vec4<f32>,
     @location(2) uv: vec2<f32>,
     @location(3) frag_pos: vec3<f32>,
-    @location(4) ambient: vec4<f32>,
-    @location(5) diffuse: vec4<f32>,
-    @location(6) specular: vec4<f32>,
-    @location(7) shininess: f32,
+    @location(4) specular: vec4<f32>,
+    @location(5) shininess: f32,
 };
 
 fn rotate_coords(coords: vec3<f32>, degrees: f32) -> vec3<f32> {
@@ -104,8 +100,6 @@ fn vertex(vertex: Vertex, instance: InstanceInput) -> VertexOutput {
     out.normal = normal_mat * vertex.normal;
     out.uv = vertex.uv;
     out.frag_pos = vec4<f32>(model_mat * vec4<f32>(vertex.position, 1.0)).xyz;
-    out.ambient = instance.ambient;
-    out.diffuse = instance.diffuse;
     out.specular = instance.specular;
     out.shininess = instance.shininess;
     return out;
@@ -117,10 +111,8 @@ struct FragmentInput {
     @location(1) position: vec4<f32>,
     @location(2) uv: vec2<f32>,
     @location(3) frag_pos: vec3<f32>,
-    @location(4) ambient: vec4<f32>,
-    @location(5) diffuse: vec4<f32>,
-    @location(6) specular: vec4<f32>,
-    @location(7) shininess: f32,
+    @location(4) specular: vec4<f32>,
+    @location(5) shininess: f32,
 };
 
 
@@ -136,7 +128,7 @@ fn fragment(
     let specular_strength: f32 = 0.5;
 
     // Ambient color
-    let ambient = in.ambient.xyz * light.ambient.rgb;
+    let ambient = textureSample(diff_tex, diff_tex_sampler, in.uv).xyz * light.ambient.rgb;
 
     // Diffuse color
     let norm = normalize(in.normal.xyz);
@@ -145,7 +137,7 @@ fn fragment(
     // The angle between the normal and the light direction represents the diffuse intensity
     // Don't return negative values here, they aren't a thing
     let diff = max(dot(norm, light_dir), 0.0);
-    let diffuse = in.diffuse.xyz * diff * light.diffuse.rgb;
+    let diffuse = textureSample(diff_tex, diff_tex_sampler, in.uv).xyz * diff * light.diffuse.rgb;
 
     // Specular color
     // We need the view pos here which is passed through an uniform value,

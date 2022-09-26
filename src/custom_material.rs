@@ -1,4 +1,4 @@
-use crate::{BaseColorTexture, CustomCamera, LightInstances, LightMaterial, MixColorTexture};
+use crate::{CustomCamera, DiffuseTexture, LightInstances, LightMaterial, MixColorTexture};
 use bevy::{
     core_pipeline::core_3d::Transparent3d,
     ecs::system::{
@@ -37,8 +37,6 @@ use bytemuck::{Pod, Zeroable};
 #[repr(C)]
 pub struct MaterialInstance {
     pub position: Vec3,
-    pub ambient: Vec4,
-    pub diffuse: Vec4,
     pub specular: Vec4,
     pub shininess: f32,
 }
@@ -141,8 +139,6 @@ struct RenderMaterialInstance {
     // These need to be arrays, otherwise we couldn't derive Pod due to padding with shininess
     model: [[f32; 4]; 4],
     normal: [[f32; 4]; 4],
-    ambient: [f32; 4],
-    diffuse: [f32; 4],
     specular: [f32; 4],
     shininess: f32,
 }
@@ -174,7 +170,7 @@ fn prepare_buffers(
         (
             Entity,
             &MaterialInstances,
-            &BaseColorTexture,
+            &DiffuseTexture,
             &MixColorTexture,
         ),
         With<CustomMaterial>,
@@ -186,7 +182,7 @@ fn prepare_buffers(
     images: Res<RenderAssets<Image>>,
     fallback_image: Res<FallbackImage>,
 ) {
-    for (entity, instance_data, base_tex, mix_tex) in &query {
+    for (entity, instance_data, diff_tex, mix_tex) in &query {
         let render_instance_data = instance_data
             .iter()
             .map(|instance| {
@@ -194,8 +190,6 @@ fn prepare_buffers(
                 RenderMaterialInstance {
                     model: model.to_cols_array_2d(),
                     normal: model.inverse().transpose().to_cols_array_2d(),
-                    ambient: instance.ambient.into(),
-                    diffuse: instance.diffuse.into(),
                     specular: instance.specular.into(),
                     shininess: instance.shininess,
                 }
@@ -213,7 +207,7 @@ fn prepare_buffers(
         });
 
         // TODO: Figure out why the fallback image doesn't work
-        let base_tex_image = images.get(base_tex).unwrap_or(&fallback_image);
+        let diff_tex_image = images.get(diff_tex).unwrap_or(&fallback_image);
         let mix_tex_image = images.get(mix_tex).unwrap_or(&fallback_image);
 
         let view_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
@@ -266,11 +260,11 @@ fn prepare_buffers(
                 },
                 BindGroupEntry {
                     binding: 2,
-                    resource: BindingResource::TextureView(&base_tex_image.texture_view),
+                    resource: BindingResource::TextureView(&diff_tex_image.texture_view),
                 },
                 BindGroupEntry {
                     binding: 3,
-                    resource: BindingResource::Sampler(&base_tex_image.sampler),
+                    resource: BindingResource::Sampler(&diff_tex_image.sampler),
                 },
                 BindGroupEntry {
                     binding: 4,
@@ -459,19 +453,9 @@ impl SpecializedMeshPipeline for CustomMaterialPipeline {
                     shader_location: 11,
                 },
                 VertexAttribute {
-                    format: VertexFormat::Float32x4,
+                    format: VertexFormat::Float32,
                     offset: VertexFormat::Float32x4.size() * 9,
                     shader_location: 12,
-                },
-                VertexAttribute {
-                    format: VertexFormat::Float32x4,
-                    offset: VertexFormat::Float32x4.size() * 10,
-                    shader_location: 13,
-                },
-                VertexAttribute {
-                    format: VertexFormat::Float32,
-                    offset: VertexFormat::Float32x4.size() * 11,
-                    shader_location: 14,
                 },
             ],
         });

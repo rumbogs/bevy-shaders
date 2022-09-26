@@ -33,14 +33,14 @@ enum AppState {
 }
 
 #[derive(Component, Deref, Debug)]
-struct BaseColorTexture(pub Handle<Image>);
+struct DiffuseTexture(pub Handle<Image>);
 
-impl ExtractComponent for BaseColorTexture {
-    type Query = &'static BaseColorTexture;
+impl ExtractComponent for DiffuseTexture {
+    type Query = &'static DiffuseTexture;
     type Filter = ();
 
     fn extract_component(item: bevy::ecs::query::QueryItem<Self::Query>) -> Self {
-        BaseColorTexture((**item).clone())
+        DiffuseTexture((**item).clone())
     }
 }
 
@@ -221,7 +221,7 @@ fn main() {
     //})
     .insert_resource(TextureShaderResources(None))
     .add_plugins(DefaultPlugins)
-    .add_plugin(ExtractComponentPlugin::<BaseColorTexture>::default())
+    .add_plugin(ExtractComponentPlugin::<DiffuseTexture>::default())
     .add_plugin(ExtractComponentPlugin::<ColorUniform>::default())
     .add_plugin(ExtractComponentPlugin::<MixColorTexture>::default())
     .add_plugin(LightMaterialPlugin)
@@ -246,7 +246,7 @@ fn load_assets(
     asset_server: Res<AssetServer>,
 ) {
     **texture_resources = Some(vec![
-        asset_server.load("textures/wall.png"),
+        asset_server.load("textures/container2.png"),
         asset_server.load("textures/awesomeface.png"),
     ]);
 }
@@ -364,8 +364,8 @@ fn setup(
             image.texture_descriptor = TextureDescriptor {
                 label: None,
                 size: Extent3d {
-                    width: 512,
-                    height: 512,
+                    width: 500,
+                    height: 500,
                     ..default()
                 },
                 // TODO: figure out why this doesn't work for > 1
@@ -426,12 +426,10 @@ fn setup(
                     meshes.add(mesh),
                     MaterialInstances(vec![MaterialInstance {
                         position: Vec3::new(0.0, 0.0, 0.0),
-                        ambient: Color::rgba(0.0, 0.1, 0.06, 1.0).into(),
-                        diffuse: Color::rgba(0.0, 0.509_803_9, 0.509_803_9, 1.0).into(),
                         specular: Color::rgba(0.501_960_7, 0.501_960_7, 0.501_960_7, 1.0).into(),
                         shininess: 25.0,
                     }]),
-                    BaseColorTexture(textures[0].clone()),
+                    DiffuseTexture(textures[0].clone()),
                     MixColorTexture(textures[1].clone()),
                     CustomMaterial,
                     // NOTE: Frustum culling is done based on the Aabb of the Mesh and the GlobalTransform.
