@@ -45,26 +45,14 @@ impl ExtractComponent for DiffuseTexture {
 }
 
 #[derive(Component, Deref, Debug)]
-struct MixColorTexture(pub Handle<Image>);
+struct SpecularTexture(pub Handle<Image>);
 
-impl ExtractComponent for MixColorTexture {
-    type Query = &'static MixColorTexture;
+impl ExtractComponent for SpecularTexture {
+    type Query = &'static SpecularTexture;
     type Filter = ();
 
     fn extract_component(item: bevy::ecs::query::QueryItem<Self::Query>) -> Self {
-        MixColorTexture((**item).clone())
-    }
-}
-
-#[derive(Component, Deref, DerefMut, Debug)]
-pub struct ColorUniform(pub [f32; 4]);
-
-impl ExtractComponent for ColorUniform {
-    type Query = &'static ColorUniform;
-    type Filter = ();
-
-    fn extract_component(item: bevy::ecs::query::QueryItem<Self::Query>) -> Self {
-        ColorUniform(**item)
+        SpecularTexture((**item).clone())
     }
 }
 
@@ -222,8 +210,7 @@ fn main() {
     .insert_resource(TextureShaderResources(None))
     .add_plugins(DefaultPlugins)
     .add_plugin(ExtractComponentPlugin::<DiffuseTexture>::default())
-    .add_plugin(ExtractComponentPlugin::<ColorUniform>::default())
-    .add_plugin(ExtractComponentPlugin::<MixColorTexture>::default())
+    .add_plugin(ExtractComponentPlugin::<SpecularTexture>::default())
     .add_plugin(LightMaterialPlugin)
     .add_plugin(CustomMaterialPlugin)
     .add_plugin(CameraPlugin)
@@ -247,7 +234,7 @@ fn load_assets(
 ) {
     **texture_resources = Some(vec![
         asset_server.load("textures/container2.png"),
-        asset_server.load("textures/awesomeface.png"),
+        asset_server.load("textures/container2_specular.png"),
     ]);
 }
 
@@ -347,11 +334,10 @@ fn setup(
             meshes.add(mesh),
             LightInstances(vec![LightInstance {
                 position: Vec3::new(0.0, 1.0, 2.0),
-                ambient: Vec3::splat(1.0).extend(1.0),
+                ambient: Vec3::splat(0.1).extend(1.0),
                 diffuse: Vec3::splat(1.0).extend(1.0),
-                specular: Vec3::splat(1.0).extend(1.0),
+                specular: Vec3::splat(0.5).extend(1.0),
             }]),
-            ColorUniform(Color::WHITE.as_rgba_f32()),
             LightMaterial,
             NoFrustumCulling,
         ))
@@ -390,8 +376,8 @@ fn setup(
             image2.texture_descriptor = TextureDescriptor {
                 label: None,
                 size: Extent3d {
-                    width: 512,
-                    height: 512,
+                    width: 500,
+                    height: 500,
                     ..default()
                 },
                 // TODO: figure out why this doesn't work for > 1
@@ -430,7 +416,7 @@ fn setup(
                         shininess: 25.0,
                     }]),
                     DiffuseTexture(textures[0].clone()),
-                    MixColorTexture(textures[1].clone()),
+                    SpecularTexture(textures[1].clone()),
                     CustomMaterial,
                     // NOTE: Frustum culling is done based on the Aabb of the Mesh and the GlobalTransform.
                     // As the cube is at the origin, if its Aabb moves outside the view frustum, all the

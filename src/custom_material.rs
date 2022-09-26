@@ -1,4 +1,4 @@
-use crate::{CustomCamera, DiffuseTexture, LightInstances, LightMaterial, MixColorTexture};
+use crate::{CustomCamera, DiffuseTexture, LightInstances, LightMaterial, SpecularTexture};
 use bevy::{
     core_pipeline::core_3d::Transparent3d,
     ecs::system::{
@@ -139,7 +139,6 @@ struct RenderMaterialInstance {
     // These need to be arrays, otherwise we couldn't derive Pod due to padding with shininess
     model: [[f32; 4]; 4],
     normal: [[f32; 4]; 4],
-    specular: [f32; 4],
     shininess: f32,
 }
 
@@ -171,7 +170,7 @@ fn prepare_buffers(
             Entity,
             &MaterialInstances,
             &DiffuseTexture,
-            &MixColorTexture,
+            &SpecularTexture,
         ),
         With<CustomMaterial>,
     >,
@@ -182,7 +181,7 @@ fn prepare_buffers(
     images: Res<RenderAssets<Image>>,
     fallback_image: Res<FallbackImage>,
 ) {
-    for (entity, instance_data, diff_tex, mix_tex) in &query {
+    for (entity, instance_data, diff_tex, spec_tex) in &query {
         let render_instance_data = instance_data
             .iter()
             .map(|instance| {
@@ -190,7 +189,6 @@ fn prepare_buffers(
                 RenderMaterialInstance {
                     model: model.to_cols_array_2d(),
                     normal: model.inverse().transpose().to_cols_array_2d(),
-                    specular: instance.specular.into(),
                     shininess: instance.shininess,
                 }
             })
@@ -208,7 +206,7 @@ fn prepare_buffers(
 
         // TODO: Figure out why the fallback image doesn't work
         let diff_tex_image = images.get(diff_tex).unwrap_or(&fallback_image);
-        let mix_tex_image = images.get(mix_tex).unwrap_or(&fallback_image);
+        let spec_tex_image = images.get(spec_tex).unwrap_or(&fallback_image);
 
         let view_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("view mat buffer"),
@@ -268,11 +266,11 @@ fn prepare_buffers(
                 },
                 BindGroupEntry {
                     binding: 4,
-                    resource: BindingResource::TextureView(&mix_tex_image.texture_view),
+                    resource: BindingResource::TextureView(&spec_tex_image.texture_view),
                 },
                 BindGroupEntry {
                     binding: 5,
-                    resource: BindingResource::Sampler(&mix_tex_image.sampler),
+                    resource: BindingResource::Sampler(&spec_tex_image.sampler),
                 },
                 BindGroupEntry {
                     binding: 6,
@@ -448,14 +446,9 @@ impl SpecializedMeshPipeline for CustomMaterialPipeline {
                     shader_location: 10,
                 },
                 VertexAttribute {
-                    format: VertexFormat::Float32x4,
+                    format: VertexFormat::Float32,
                     offset: VertexFormat::Float32x4.size() * 8,
                     shader_location: 11,
-                },
-                VertexAttribute {
-                    format: VertexFormat::Float32,
-                    offset: VertexFormat::Float32x4.size() * 9,
-                    shader_location: 12,
                 },
             ],
         });

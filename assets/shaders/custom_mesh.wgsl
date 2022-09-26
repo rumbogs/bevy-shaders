@@ -15,10 +15,10 @@ var diff_tex: texture_2d<f32>;
 var diff_tex_sampler: sampler;
 
 @group(2) @binding(4)
-var mix_tex: texture_2d<f32>;
+var spec_tex: texture_2d<f32>;
 
 @group(2) @binding(5)
-var mix_tex_sampler: sampler;
+var spec_tex_sampler: sampler;
 
 struct LightMaterial {
     position: vec3<f32>,
@@ -42,8 +42,7 @@ struct InstanceInput {
     @location(8) normal_mat_1: vec4<f32>,
     @location(9) normal_mat_2: vec4<f32>,
     @location(10) normal_mat_3: vec4<f32>,
-    @location(11) specular: vec4<f32>,
-    @location(12) shininess: f32,
+    @location(11) shininess: f32,
 }
 
 // NOTE: Bindings must come before functions that use them!
@@ -63,8 +62,7 @@ struct VertexOutput {
     @location(1) position: vec4<f32>,
     @location(2) uv: vec2<f32>,
     @location(3) frag_pos: vec3<f32>,
-    @location(4) specular: vec4<f32>,
-    @location(5) shininess: f32,
+    @location(4) shininess: f32,
 };
 
 fn rotate_coords(coords: vec3<f32>, degrees: f32) -> vec3<f32> {
@@ -100,7 +98,6 @@ fn vertex(vertex: Vertex, instance: InstanceInput) -> VertexOutput {
     out.normal = normal_mat * vertex.normal;
     out.uv = vertex.uv;
     out.frag_pos = vec4<f32>(model_mat * vec4<f32>(vertex.position, 1.0)).xyz;
-    out.specular = instance.specular;
     out.shininess = instance.shininess;
     return out;
 }
@@ -111,8 +108,7 @@ struct FragmentInput {
     @location(1) position: vec4<f32>,
     @location(2) uv: vec2<f32>,
     @location(3) frag_pos: vec3<f32>,
-    @location(4) specular: vec4<f32>,
-    @location(5) shininess: f32,
+    @location(4) shininess: f32,
 };
 
 
@@ -148,7 +144,7 @@ fn fragment(
     let reflect_dir = reflect(-light_dir, norm);
     // 32 is the shininess value, the large it is the less it scatters the light (smaller highlight)
     let spec = pow(max(dot(view_dir, reflect_dir), 0.0), in.shininess);
-    let specular = in.specular.xyz * spec * light.specular.rgb;
+    let specular = textureSample(spec_tex, spec_tex_sampler, in.uv).xyz * spec * light.specular.rgb;
 
     let result = ambient + diffuse + specular;
     return vec4<f32>(result, 1.0);
