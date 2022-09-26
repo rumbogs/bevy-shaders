@@ -60,7 +60,6 @@ struct VertexOutput {
     @location(1) position: vec4<f32>,
     @location(2) uv: vec2<f32>,
     @location(3) frag_pos: vec3<f32>,
-    @location(4) light_pos: vec3<f32>,
 };
 
 fn rotate_coords(coords: vec3<f32>, degrees: f32) -> vec3<f32> {
@@ -95,8 +94,7 @@ fn vertex(vertex: Vertex, instance: InstanceInput) -> VertexOutput {
     // similar to the model matrix.   
     out.normal = normal_mat * vertex.normal;
     out.uv = vertex.uv;
-    out.frag_pos = vec4<f32>(view_mat * model_mat * vec4<f32>(vertex.position, 1.0)).xyz;
-    out.light_pos = vec4<f32>(view_mat * vec4<f32>(light_pos, 1.0)).xyz;
+    out.frag_pos = vec4<f32>(model_mat * vec4<f32>(vertex.position, 1.0)).xyz;
     return out;
 }
 
@@ -106,7 +104,6 @@ struct FragmentInput {
     @location(1) position: vec4<f32>,
     @location(2) uv: vec2<f32>,
     @location(3) frag_pos: vec3<f32>,
-    @location(4) light_pos: vec3<f32>,
 };
 
 /// Entry point for the fragment shader
@@ -127,7 +124,7 @@ fn fragment(
     // Diffuse color
     let norm = normalize(in.normal.xyz);
     // Light direction is the diff between it's position and the current frag pos
-    let light_dir = normalize(in.light_pos - in.frag_pos);
+    let light_dir = normalize(light_pos - in.frag_pos);
     // The angle between the normal and the light direction represents the diffuse intensity
     // Don't return negative values here, they aren't a thing
     let diff = max(dot(norm, light_dir), 0.0);
@@ -137,7 +134,7 @@ fn fragment(
     // We need the view pos here which is passed through an uniform value,
     // But we could have just transformed the vertex out values from the world coord to a view coord
     // That way we would get the view pos for free (i.e. multiply the "frag_pos" and "normal" by both the "model" and "view mat", I think)
-    let view_dir = normalize(- in.frag_pos);
+    let view_dir = normalize(view_pos - in.frag_pos);
     // The light direction is pointing from the frag pos to the light source so negate that
     let reflect_dir = reflect(-light_dir, norm);
     // 32 is the shininess value, the large it is the less it scatters the light (smaller highlight)

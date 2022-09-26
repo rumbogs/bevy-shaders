@@ -157,7 +157,7 @@ fn prepare_buffers(
                         let model = Mat4::from_translation(instance.position);
                         RenderInstanceData {
                             model,
-                            normal: (camera.get_view() * model).inverse().transpose(),
+                            normal: model.inverse().transpose(),
                         }
                     })
                     .collect::<Vec<RenderInstanceData>>()
@@ -361,7 +361,7 @@ impl FromWorld for CustomMaterialPipeline {
                     },
                     BindGroupLayoutEntry {
                         binding: 8,
-                        visibility: ShaderStages::VERTEX,
+                        visibility: ShaderStages::FRAGMENT,
                         ty: BindingType::Buffer {
                             ty: BufferBindingType::Uniform,
                             has_dynamic_offset: false,
