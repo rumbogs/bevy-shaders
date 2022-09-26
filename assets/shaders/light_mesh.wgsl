@@ -8,14 +8,14 @@ var<uniform> view_mat: mat4x4<f32>;
 @group(2) @binding(1)
 var<uniform> projection_mat: mat4x4<f32>;
 
-@group(2) @binding(2)
-var<uniform> light_color: vec4<f32>;
-
 struct InstanceInput {
     @location(3) model_mat_0: vec4<f32>,
     @location(4) model_mat_1: vec4<f32>,
     @location(5) model_mat_2: vec4<f32>,
     @location(6) model_mat_3: vec4<f32>,
+    @location(7) ambient: vec4<f32>,
+    @location(8) diffuse: vec4<f32>,
+    @location(9) specular: vec4<f32>,
 }
 
 // NOTE: Bindings must come before functions that use them!
@@ -31,6 +31,9 @@ struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     // We pass the vertex color to the fragment shader in location 0
     @location(1) position: vec4<f32>,
+    @location(2) ambient: vec4<f32>,
+    @location(3) diffuse: vec4<f32>,
+    @location(4) specular: vec4<f32>,
 };
 
 /// Entry point for the vertex shader
@@ -44,12 +47,18 @@ fn vertex(vertex: Vertex, instance: InstanceInput) -> VertexOutput {
     // Otherwise, if we have normalized coords (-1, 1) we can just copy the position
     out.clip_position = projection_mat * view_mat * model_mat * vec4<f32>(vertex.position, 1.0);
     out.position = vec4<f32>(vertex.position, 1.0);
+    out.ambient = instance.ambient;
+    out.diffuse = instance.diffuse;
+    out.specular = instance.specular;
     return out;
 }
 
 // The input of the fragment shader must correspond to the output of the vertex shader for all `location`s
 struct FragmentInput {
     @location(1) position: vec4<f32>,
+    @location(2) ambient: vec4<f32>,
+    @location(3) diffuse: vec4<f32>,
+    @location(4) specular: vec4<f32>,
 };
 
 /// Entry point for the fragment shader
@@ -58,5 +67,5 @@ fn fragment(
     @builtin(position) position: vec4<f32>,
     in: FragmentInput
 ) -> @location(0) vec4<f32> {
-    return light_color;
+    return in.ambient + in.diffuse + in.specular;
 }

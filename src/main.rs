@@ -22,7 +22,6 @@ use bevy::{
     },
     window::close_on_esc,
 };
-use bytemuck::{Pod, Zeroable};
 
 #[derive(Deref, DerefMut, Debug)]
 pub struct TextureShaderResources(Option<Vec<Handle<Image>>>);
@@ -31,24 +30,6 @@ pub struct TextureShaderResources(Option<Vec<Handle<Image>>>);
 enum AppState {
     LoadAssets,
     Main,
-}
-
-#[derive(Component, Debug, Clone, Copy, Pod, Zeroable)]
-#[repr(C)]
-pub struct InstanceData {
-    pub position: Vec3,
-}
-
-#[derive(Component, Deref, DerefMut, Debug)]
-pub struct InstanceMaterialData(pub Vec<InstanceData>);
-
-impl ExtractComponent for InstanceMaterialData {
-    type Query = &'static InstanceMaterialData;
-    type Filter = ();
-
-    fn extract_component(item: bevy::ecs::query::QueryItem<Self::Query>) -> Self {
-        InstanceMaterialData(item.0.clone())
-    }
 }
 
 #[derive(Component, Deref, Debug)]
@@ -72,6 +53,18 @@ impl ExtractComponent for MixColorTexture {
 
     fn extract_component(item: bevy::ecs::query::QueryItem<Self::Query>) -> Self {
         MixColorTexture((**item).clone())
+    }
+}
+
+#[derive(Component, Deref, DerefMut, Debug)]
+pub struct ColorUniform(pub [f32; 4]);
+
+impl ExtractComponent for ColorUniform {
+    type Query = &'static ColorUniform;
+    type Filter = ();
+
+    fn extract_component(item: bevy::ecs::query::QueryItem<Self::Query>) -> Self {
+        ColorUniform(**item)
     }
 }
 
@@ -228,7 +221,6 @@ fn main() {
     //})
     .insert_resource(TextureShaderResources(None))
     .add_plugins(DefaultPlugins)
-    .add_plugin(ExtractComponentPlugin::<InstanceMaterialData>::default())
     .add_plugin(ExtractComponentPlugin::<BaseColorTexture>::default())
     .add_plugin(ExtractComponentPlugin::<ColorUniform>::default())
     .add_plugin(ExtractComponentPlugin::<MixColorTexture>::default())
@@ -283,9 +275,21 @@ fn extract_custom_camera(mut commands: Commands, world: Res<MainWorld>) {
     }
 }
 
-fn move_light(mut query: Query<&mut InstanceMaterialData, With<LightMaterial>>, time: Res<Time>) {
-    for mut light_instance_data in &mut query {
-        light_instance_data[0].position.x = time.seconds_since_startup().sin() as f32;
+fn move_light(mut query: Query<&mut LightInstances, With<LightMaterial>>, time: Res<Time>) {
+    for mut light_instances in &mut query {
+        let time_val = time.seconds_since_startup() as f32;
+        light_instances[0].position.x = time_val.sin();
+
+        //let light_col = Vec4::new(
+        //(time_val * 2.0).sin(),
+        //(time_val * 0.7).sin(),
+        //(time_val * 1.3).sin(),
+        //1.0,
+        //);
+        //let diffuse_col = light_col * Vec4::splat(0.5);
+        //let ambient_col = diffuse_col * Vec4::splat(0.2);
+        //light_instances[0].diffuse = diffuse_col;
+        //light_instances[0].ambient = ambient_col;
     }
 }
 
@@ -341,8 +345,11 @@ fn setup(
         .spawn()
         .insert_bundle((
             meshes.add(mesh),
-            InstanceMaterialData(vec![InstanceData {
+            LightInstances(vec![LightInstance {
                 position: Vec3::new(0.0, 1.0, 2.0),
+                ambient: Vec3::splat(1.0).extend(1.0),
+                diffuse: Vec3::splat(1.0).extend(1.0),
+                specular: Vec3::splat(1.0).extend(1.0),
             }]),
             ColorUniform(Color::WHITE.as_rgba_f32()),
             LightMaterial,
@@ -417,10 +424,13 @@ fn setup(
                 .spawn()
                 .insert_bundle((
                     meshes.add(mesh),
-                    InstanceMaterialData(vec![InstanceData {
+                    MaterialInstances(vec![MaterialInstance {
                         position: Vec3::new(0.0, 0.0, 0.0),
+                        ambient: Color::rgba(0.0, 0.1, 0.06, 1.0).into(),
+                        diffuse: Color::rgba(0.0, 0.509_803_9, 0.509_803_9, 1.0).into(),
+                        specular: Color::rgba(0.501_960_7, 0.501_960_7, 0.501_960_7, 1.0).into(),
+                        shininess: 25.0,
                     }]),
-                    ColorUniform(Color::CRIMSON.as_rgba_f32()),
                     BaseColorTexture(textures[0].clone()),
                     MixColorTexture(textures[1].clone()),
                     CustomMaterial,

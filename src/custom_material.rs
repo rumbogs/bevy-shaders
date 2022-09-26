@@ -1,4 +1,4 @@
-use crate::{BaseColorTexture, CustomCamera, InstanceMaterialData, LightMaterial, MixColorTexture};
+use crate::{BaseColorTexture, CustomCamera, LightInstances, LightMaterial, MixColorTexture};
 use bevy::{
     core_pipeline::core_3d::Transparent3d,
     ecs::system::{
@@ -16,11 +16,11 @@ use bevy::{
             SetItemPipeline, TrackedRenderPass,
         },
         render_resource::{
-            BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout,
+            encase::UniformBuffer, BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout,
             BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingResource, BindingType, Buffer,
             BufferBindingType, BufferInitDescriptor, BufferSize, BufferUsages, CompareFunction,
             DepthBiasState, DepthStencilState, FrontFace, PipelineCache, PolygonMode,
-            PrimitiveState, RenderPipelineDescriptor, SamplerBindingType, ShaderStages,
+            PrimitiveState, RenderPipelineDescriptor, SamplerBindingType, ShaderStages, ShaderType,
             SpecializedMeshPipeline, SpecializedMeshPipelineError, SpecializedMeshPipelines,
             StencilState, TextureFormat, TextureSampleType, TextureViewDimension, VertexAttribute,
             VertexBufferLayout, VertexFormat, VertexStepMode,
@@ -33,7 +33,30 @@ use bevy::{
 };
 use bytemuck::{Pod, Zeroable};
 
-#[derive(Component)]
+#[derive(Component, Debug, Clone, Copy)]
+#[repr(C)]
+pub struct MaterialInstance {
+    pub position: Vec3,
+    pub ambient: Vec4,
+    pub diffuse: Vec4,
+    pub specular: Vec4,
+    pub shininess: f32,
+}
+
+#[derive(Component, Deref, DerefMut, Debug)]
+pub struct MaterialInstances(pub Vec<MaterialInstance>);
+
+impl ExtractComponent for MaterialInstances {
+    type Query = &'static MaterialInstances;
+    type Filter = ();
+
+    fn extract_component(item: bevy::ecs::query::QueryItem<Self::Query>) -> Self {
+        MaterialInstances(item.0.clone())
+    }
+}
+
+#[derive(Component, Clone, Copy)]
+#[repr(C)]
 pub struct CustomMaterial;
 
 impl ExtractComponent for CustomMaterial {
@@ -45,23 +68,12 @@ impl ExtractComponent for CustomMaterial {
     }
 }
 
-#[derive(Component, Deref, DerefMut, Debug)]
-pub struct ColorUniform(pub [f32; 4]);
-
-impl ExtractComponent for ColorUniform {
-    type Query = &'static ColorUniform;
-    type Filter = ();
-
-    fn extract_component(item: bevy::ecs::query::QueryItem<Self::Query>) -> Self {
-        ColorUniform(**item)
-    }
-}
-
 pub struct CustomMaterialPlugin;
 
 impl Plugin for CustomMaterialPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugin(ExtractComponentPlugin::<CustomMaterial>::default());
+        app.add_plugin(ExtractComponentPlugin::<CustomMaterial>::default())
+            .add_plugin(ExtractComponentPlugin::<MaterialInstances>::default());
         app.sub_app_mut(RenderApp)
             .add_render_command::<Transparent3d, DrawCustomMaterial>()
             .init_resource::<CustomMaterialPipeline>()
@@ -123,46 +135,76 @@ pub struct InstanceBuffer {
 pub struct UniformMeta {
     pub bind_group: BindGroup,
 }
-#[derive(Component, Debug, Pod, Zeroable, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Pod, Zeroable)]
 #[repr(C)]
-struct RenderInstanceData {
-    model: Mat4,
-    normal: Mat4,
+struct RenderMaterialInstance {
+    // These need to be arrays, otherwise we couldn't derive Pod due to padding with shininess
+    model: [[f32; 4]; 4],
+    normal: [[f32; 4]; 4],
+    ambient: [f32; 4],
+    diffuse: [f32; 4],
+    specular: [f32; 4],
+    shininess: f32,
+}
+
+#[derive(Debug, Copy, Clone, ShaderType)]
+#[repr(C)]
+struct LightSettings {
+    position: Vec3,
+    ambient: Vec4,
+    diffuse: Vec4,
+    specular: Vec4,
+}
+
+impl Default for LightSettings {
+    fn default() -> Self {
+        Self {
+            position: Vec3::splat(0.0),
+            ambient: Vec4::splat(1.0),
+            diffuse: Vec4::splat(1.0),
+            specular: Vec4::splat(1.0),
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn prepare_buffers(
     mut commands: Commands,
-    query: Query<(
-        Entity,
-        &InstanceMaterialData,
-        &ColorUniform,
-        &BaseColorTexture,
-        &MixColorTexture,
-    )>,
-    lights_query: Query<(&ColorUniform, &InstanceMaterialData), With<LightMaterial>>,
+    query: Query<
+        (
+            Entity,
+            &MaterialInstances,
+            &BaseColorTexture,
+            &MixColorTexture,
+        ),
+        With<CustomMaterial>,
+    >,
+    lights_query: Query<&LightInstances, With<LightMaterial>>,
     camera: Res<CustomCamera>,
     render_device: Res<RenderDevice>,
     pipeline: Res<CustomMaterialPipeline>,
     images: Res<RenderAssets<Image>>,
     fallback_image: Res<FallbackImage>,
 ) {
-    for (entity, instance_data, color, base_tex, mix_tex) in &query {
+    for (entity, instance_data, base_tex, mix_tex) in &query {
+        let render_instance_data = instance_data
+            .iter()
+            .map(|instance| {
+                let model = Mat4::from_translation(instance.position);
+                RenderMaterialInstance {
+                    model: model.to_cols_array_2d(),
+                    normal: model.inverse().transpose().to_cols_array_2d(),
+                    ambient: instance.ambient.into(),
+                    diffuse: instance.diffuse.into(),
+                    specular: instance.specular.into(),
+                    shininess: instance.shininess,
+                }
+            })
+            .collect::<Vec<RenderMaterialInstance>>();
+
         let instance_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("instance data buffer"),
-            contents: bytemuck::cast_slice(
-                instance_data
-                    .iter()
-                    .map(|instance| {
-                        let model = Mat4::from_translation(instance.position);
-                        RenderInstanceData {
-                            model,
-                            normal: model.inverse().transpose(),
-                        }
-                    })
-                    .collect::<Vec<RenderInstanceData>>()
-                    .as_slice(),
-            ),
+            contents: bytemuck::cast_slice(render_instance_data.as_slice()),
             usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
         });
         commands.entity(entity).insert(InstanceBuffer {
@@ -184,29 +226,25 @@ fn prepare_buffers(
             contents: bytemuck::cast_slice(&[camera.get_proj()]),
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
         });
-        let color_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
-            label: Some("color buffer"),
-            contents: bytemuck::cast_slice(&[**color]),
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-        });
-        // Default to WHITE if there is no light
         // We know there's only one light here so add only one binding
         // Ideally this could add a number of default black lights so that it could support
         // multiple lights in case they exist, but right now we know there's only 1
-        let mut lights_color = Color::WHITE.as_rgba_f32();
-        let mut lights_pos = Vec3::ZERO;
-        if let Ok((color, instance_data)) = lights_query.get_single() {
-            lights_color = **color;
-            lights_pos = (**instance_data)[0].position;
+        let mut light_material = LightSettings::default();
+        if let Ok(light_instances) = lights_query.get_single() {
+            let light = (**light_instances)[0];
+            light_material = LightSettings {
+                position: light.position,
+                ambient: light.ambient,
+                diffuse: light.diffuse,
+                specular: light.specular,
+            };
         }
-        let light_color_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
+        let mut light_mat_buf = UniformBuffer::new(Vec::new());
+        light_mat_buf.write(&light_material).unwrap();
+
+        let light_mat_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("light color buffer"),
-            contents: bytemuck::cast_slice(&[lights_color]),
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-        });
-        let light_pos_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
-            label: Some("light pos buffer"),
-            contents: bytemuck::cast_slice(&[lights_pos]),
+            contents: light_mat_buf.as_ref(),
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
         });
         let view_pos_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
@@ -244,18 +282,10 @@ fn prepare_buffers(
                 },
                 BindGroupEntry {
                     binding: 6,
-                    resource: color_buffer.as_entire_binding(),
+                    resource: light_mat_buffer.as_entire_binding(),
                 },
                 BindGroupEntry {
                     binding: 7,
-                    resource: light_color_buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 8,
-                    resource: light_pos_buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 9,
                     resource: view_pos_buffer.as_entire_binding(),
                 },
             ],
@@ -341,38 +371,12 @@ impl FromWorld for CustomMaterialPipeline {
                         ty: BindingType::Buffer {
                             ty: BufferBindingType::Uniform,
                             has_dynamic_offset: false,
-                            min_binding_size: BufferSize::new(
-                                std::mem::size_of::<[f32; 4]>() as u64
-                            ),
+                            min_binding_size: Some(LightSettings::min_size()),
                         },
                         count: None,
                     },
                     BindGroupLayoutEntry {
                         binding: 7,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: BufferSize::new(
-                                std::mem::size_of::<[f32; 4]>() as u64
-                            ),
-                        },
-                        count: None,
-                    },
-                    BindGroupLayoutEntry {
-                        binding: 8,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: BufferSize::new(
-                                std::mem::size_of::<[f32; 3]>() as u64
-                            ),
-                        },
-                        count: None,
-                    },
-                    BindGroupLayoutEntry {
-                        binding: 9,
                         visibility: ShaderStages::FRAGMENT,
                         ty: BindingType::Buffer {
                             ty: BufferBindingType::Uniform,
@@ -405,7 +409,7 @@ impl SpecializedMeshPipeline for CustomMaterialPipeline {
         let mut descriptor = self.mesh_pipeline.specialize(key, layout)?;
         descriptor.vertex.shader = self.shader.clone();
         descriptor.vertex.buffers.push(VertexBufferLayout {
-            array_stride: (std::mem::size_of::<RenderInstanceData>() as u64),
+            array_stride: (std::mem::size_of::<RenderMaterialInstance>() as u64),
             step_mode: VertexStepMode::Instance,
             attributes: vec![
                 // shader locations 0-2 are taken up by Position, Normal and UV attributes
@@ -448,6 +452,26 @@ impl SpecializedMeshPipeline for CustomMaterialPipeline {
                     format: VertexFormat::Float32x4,
                     offset: VertexFormat::Float32x4.size() * 7,
                     shader_location: 10,
+                },
+                VertexAttribute {
+                    format: VertexFormat::Float32x4,
+                    offset: VertexFormat::Float32x4.size() * 8,
+                    shader_location: 11,
+                },
+                VertexAttribute {
+                    format: VertexFormat::Float32x4,
+                    offset: VertexFormat::Float32x4.size() * 9,
+                    shader_location: 12,
+                },
+                VertexAttribute {
+                    format: VertexFormat::Float32x4,
+                    offset: VertexFormat::Float32x4.size() * 10,
+                    shader_location: 13,
+                },
+                VertexAttribute {
+                    format: VertexFormat::Float32,
+                    offset: VertexFormat::Float32x4.size() * 11,
+                    shader_location: 14,
                 },
             ],
         });

@@ -1,4 +1,4 @@
-use crate::{ColorUniform, CustomCamera, InstanceBuffer, InstanceMaterialData, UniformMeta};
+use crate::{CustomCamera, InstanceBuffer, UniformMeta};
 use bevy::{
     core_pipeline::core_3d::Transparent3d,
     ecs::system::{
@@ -29,6 +29,36 @@ use bevy::{
         RenderApp, RenderStage,
     },
 };
+use bytemuck::{Pod, Zeroable};
+
+#[derive(Component, Debug, Clone, Copy)]
+pub struct LightInstance {
+    pub position: Vec3,
+    pub ambient: Vec4,
+    pub diffuse: Vec4,
+    pub specular: Vec4,
+}
+
+#[derive(Component, Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+struct RenderLightInstance {
+    position: Mat4,
+    ambient: Vec4,
+    diffuse: Vec4,
+    specular: Vec4,
+}
+
+#[derive(Component, Deref, DerefMut, Debug)]
+pub struct LightInstances(pub Vec<LightInstance>);
+
+impl ExtractComponent for LightInstances {
+    type Query = &'static LightInstances;
+    type Filter = ();
+
+    fn extract_component(item: bevy::ecs::query::QueryItem<Self::Query>) -> Self {
+        LightInstances(item.0.clone())
+    }
+}
 
 #[derive(Component)]
 pub struct LightMaterial;
@@ -46,7 +76,8 @@ pub struct LightMaterialPlugin;
 
 impl Plugin for LightMaterialPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugin(ExtractComponentPlugin::<LightMaterial>::default());
+        app.add_plugin(ExtractComponentPlugin::<LightMaterial>::default())
+            .add_plugin(ExtractComponentPlugin::<LightInstances>::default());
         app.sub_app_mut(RenderApp)
             .add_render_command::<Transparent3d, DrawLightMaterial>()
             .init_resource::<LightMaterialPipeline>()
@@ -101,26 +132,31 @@ fn queue_light_material(
 
 pub fn prepare_light_material_buffers(
     mut commands: Commands,
-    query: Query<(Entity, &InstanceMaterialData, &ColorUniform)>,
+    query: Query<(Entity, &LightInstances), With<LightMaterial>>,
     camera: Res<CustomCamera>,
     render_device: Res<RenderDevice>,
     pipeline: Res<LightMaterialPipeline>,
 ) {
-    for (entity, instance_data, color) in &query {
+    for (entity, light_instances) in &query {
         let instance_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("instance data buffer"),
             contents: bytemuck::cast_slice(
-                instance_data
+                light_instances
                     .iter()
-                    .map(|instance| Mat4::from_translation(instance.position))
-                    .collect::<Vec<Mat4>>()
+                    .map(|instance| RenderLightInstance {
+                        position: Mat4::from_translation(instance.position),
+                        ambient: instance.ambient,
+                        diffuse: instance.diffuse,
+                        specular: instance.specular,
+                    })
+                    .collect::<Vec<RenderLightInstance>>()
                     .as_slice(),
             ),
             usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
         });
         commands.entity(entity).insert(InstanceBuffer {
             buffer: instance_buffer,
-            length: instance_data.len(),
+            length: light_instances.len(),
         });
 
         let view_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
@@ -131,11 +167,6 @@ pub fn prepare_light_material_buffers(
         let proj_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("proj mat buffer"),
             contents: bytemuck::cast_slice(&[camera.get_proj()]),
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-        });
-        let color_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
-            label: Some("color buffer"),
-            contents: bytemuck::cast_slice(&[**color]),
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
         });
         let bind_group = render_device.create_bind_group(&BindGroupDescriptor {
@@ -149,10 +180,6 @@ pub fn prepare_light_material_buffers(
                 BindGroupEntry {
                     binding: 1,
                     resource: proj_buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 2,
-                    resource: color_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -196,18 +223,6 @@ impl FromWorld for LightMaterialPipeline {
                             ty: BufferBindingType::Uniform,
                             has_dynamic_offset: false,
                             min_binding_size: BufferSize::new(std::mem::size_of::<Mat4>() as u64),
-                        },
-                        count: None,
-                    },
-                    BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: BufferSize::new(
-                                std::mem::size_of::<[f32; 4]>() as u64
-                            ),
                         },
                         count: None,
                     },
@@ -256,6 +271,21 @@ impl SpecializedMeshPipeline for LightMaterialPipeline {
                     format: VertexFormat::Float32x4,
                     offset: VertexFormat::Float32x4.size() * 3,
                     shader_location: 6,
+                },
+                VertexAttribute {
+                    format: VertexFormat::Float32x4,
+                    offset: VertexFormat::Float32x4.size() * 4,
+                    shader_location: 7,
+                },
+                VertexAttribute {
+                    format: VertexFormat::Float32x4,
+                    offset: VertexFormat::Float32x4.size() * 5,
+                    shader_location: 8,
+                },
+                VertexAttribute {
+                    format: VertexFormat::Float32x4,
+                    offset: VertexFormat::Float32x4.size() * 6,
+                    shader_location: 9,
                 },
             ],
         });
