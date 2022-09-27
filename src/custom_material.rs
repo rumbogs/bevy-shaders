@@ -1,4 +1,7 @@
-use crate::{CustomCamera, DiffuseTexture, LightInstances, LightMaterial, SpecularTexture};
+use crate::{
+    CustomCamera, DiffuseTexture, DirectionalLight, EmissionTexture, PointLightInstances,
+    PointLightMaterial, SpecularTexture, Spotlight,
+};
 use bevy::{
     core_pipeline::core_3d::Transparent3d,
     ecs::system::{
@@ -37,12 +40,17 @@ use bytemuck::{Pod, Zeroable};
 #[repr(C)]
 pub struct MaterialInstance {
     pub position: Vec3,
-    pub specular: Vec4,
+    pub rotation_x: f32,
+    pub rotation_y: f32,
+    pub rotation_z: f32,
     pub shininess: f32,
 }
 
 #[derive(Component, Deref, DerefMut, Debug)]
 pub struct MaterialInstances(pub Vec<MaterialInstance>);
+
+// The array size needs to be kept in sync with the custom_mesh.wgsl shader
+const NR_POINT_LIGHTS: usize = 4;
 
 impl ExtractComponent for MaterialInstances {
     type Query = &'static MaterialInstances;
@@ -144,20 +152,50 @@ struct RenderMaterialInstance {
 
 #[derive(Debug, Copy, Clone, ShaderType)]
 #[repr(C)]
-struct LightSettings {
-    position: Vec3,
+struct DirectionalLightSettings {
+    direction: Vec3,
     ambient: Vec4,
     diffuse: Vec4,
     specular: Vec4,
 }
 
-impl Default for LightSettings {
+#[derive(Debug, Copy, Clone, ShaderType)]
+#[repr(C)]
+struct PointLightSettings {
+    position: Vec3,
+    constant: f32,
+    linear: f32,
+    quadratic: f32,
+    ambient: Vec4,
+    diffuse: Vec4,
+    specular: Vec4,
+}
+
+#[derive(Debug, Copy, Clone, ShaderType)]
+#[repr(C)]
+struct SpotlightSettings {
+    direction: Vec3,
+    position: Vec3,
+    cutoff: f32,
+    outer_cutoff: f32,
+    ambient: Vec4,
+    diffuse: Vec4,
+    specular: Vec4,
+    constant: f32,
+    linear: f32,
+    quadratic: f32,
+}
+
+impl Default for PointLightSettings {
     fn default() -> Self {
         Self {
             position: Vec3::splat(0.0),
-            ambient: Vec4::splat(1.0),
-            diffuse: Vec4::splat(1.0),
-            specular: Vec4::splat(1.0),
+            constant: 1.0,
+            linear: 0.1,
+            quadratic: 0.01,
+            ambient: Vec4::splat(0.0),
+            diffuse: Vec4::splat(0.0),
+            specular: Vec4::splat(0.0),
         }
     }
 }
@@ -171,21 +209,26 @@ fn prepare_buffers(
             &MaterialInstances,
             &DiffuseTexture,
             &SpecularTexture,
+            &EmissionTexture,
         ),
         With<CustomMaterial>,
     >,
-    lights_query: Query<&LightInstances, With<LightMaterial>>,
+    lights_query: Query<&PointLightInstances, With<PointLightMaterial>>,
     camera: Res<CustomCamera>,
     render_device: Res<RenderDevice>,
     pipeline: Res<CustomMaterialPipeline>,
     images: Res<RenderAssets<Image>>,
     fallback_image: Res<FallbackImage>,
+    dir_light: Res<DirectionalLight>,
+    spot_light: Res<Spotlight>,
 ) {
-    for (entity, instance_data, diff_tex, spec_tex) in &query {
+    for (entity, instance_data, diff_tex, spec_tex, emission_tex) in &query {
         let render_instance_data = instance_data
             .iter()
             .map(|instance| {
-                let model = Mat4::from_translation(instance.position);
+                let model = Mat4::from_translation(instance.position)
+                    * Mat4::from_rotation_y(instance.rotation_y)
+                    * Mat4::from_rotation_x(instance.rotation_x);
                 RenderMaterialInstance {
                     model: model.to_cols_array_2d(),
                     normal: model.inverse().transpose().to_cols_array_2d(),
@@ -207,6 +250,7 @@ fn prepare_buffers(
         // TODO: Figure out why the fallback image doesn't work
         let diff_tex_image = images.get(diff_tex).unwrap_or(&fallback_image);
         let spec_tex_image = images.get(spec_tex).unwrap_or(&fallback_image);
+        let emission_tex_image = images.get(emission_tex).unwrap_or(&fallback_image);
 
         let view_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("view mat buffer"),
@@ -218,25 +262,65 @@ fn prepare_buffers(
             contents: bytemuck::cast_slice(&[camera.get_proj()]),
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
         });
-        // We know there's only one light here so add only one binding
-        // Ideally this could add a number of default black lights so that it could support
-        // multiple lights in case they exist, but right now we know there's only 1
-        let mut light_material = LightSettings::default();
-        if let Ok(light_instances) = lights_query.get_single() {
-            let light = (**light_instances)[0];
-            light_material = LightSettings {
-                position: light.position,
-                ambient: light.ambient,
-                diffuse: light.diffuse,
-                specular: light.specular,
-            };
-        }
-        let mut light_mat_buf = UniformBuffer::new(Vec::new());
-        light_mat_buf.write(&light_material).unwrap();
 
-        let light_mat_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
+        let mut spot_light_mat_buf = UniformBuffer::new(Vec::new());
+        spot_light_mat_buf
+            .write(&SpotlightSettings {
+                direction: camera.get_direction(),
+                position: camera.position,
+                cutoff: spot_light.cutoff.to_radians().cos(),
+                outer_cutoff: spot_light.outer_cutoff.to_radians().cos(),
+                ambient: spot_light.ambient,
+                diffuse: spot_light.diffuse,
+                specular: spot_light.specular,
+                constant: spot_light.constant,
+                linear: spot_light.linear,
+                quadratic: spot_light.quadratic,
+            })
+            .unwrap();
+        let spot_light_mat_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
+            label: Some("spot light buffer"),
+            contents: spot_light_mat_buf.as_ref(),
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+        });
+
+        let mut dir_light_mat_buf = UniformBuffer::new(Vec::new());
+        dir_light_mat_buf
+            .write(&DirectionalLightSettings {
+                direction: dir_light.direction,
+                ambient: dir_light.ambient,
+                diffuse: dir_light.diffuse,
+                specular: dir_light.specular,
+            })
+            .unwrap();
+        let dir_light_mat_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("light color buffer"),
-            contents: light_mat_buf.as_ref(),
+            contents: dir_light_mat_buf.as_ref(),
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+        });
+
+        let mut point_lights = [PointLightSettings::default(); NR_POINT_LIGHTS];
+        if let Ok(light_instances) = lights_query.get_single() {
+            for (i, instance) in light_instances.iter().enumerate() {
+                if i < 4 {
+                    point_lights[i] = PointLightSettings {
+                        position: instance.position,
+                        constant: instance.constant,
+                        linear: instance.linear,
+                        quadratic: instance.quadratic,
+                        ambient: instance.ambient,
+                        diffuse: instance.diffuse,
+                        specular: instance.specular,
+                    };
+                }
+            }
+        }
+        let mut point_lights_mat_buf = UniformBuffer::new(Vec::new());
+        point_lights_mat_buf.write(&point_lights).unwrap();
+
+        let point_light_mat_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
+            label: Some("light color buffer"),
+            contents: point_lights_mat_buf.as_ref(),
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
         });
         let view_pos_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
@@ -274,11 +358,27 @@ fn prepare_buffers(
                 },
                 BindGroupEntry {
                     binding: 6,
-                    resource: light_mat_buffer.as_entire_binding(),
+                    resource: BindingResource::TextureView(&emission_tex_image.texture_view),
                 },
                 BindGroupEntry {
                     binding: 7,
+                    resource: BindingResource::Sampler(&emission_tex_image.sampler),
+                },
+                BindGroupEntry {
+                    binding: 8,
                     resource: view_pos_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 9,
+                    resource: dir_light_mat_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 10,
+                    resource: point_light_mat_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 11,
+                    resource: spot_light_mat_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -360,15 +460,21 @@ impl FromWorld for CustomMaterialPipeline {
                     BindGroupLayoutEntry {
                         binding: 6,
                         visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: Some(LightSettings::min_size()),
+                        ty: BindingType::Texture {
+                            multisampled: false,
+                            sample_type: TextureSampleType::Float { filterable: true },
+                            view_dimension: TextureViewDimension::D2,
                         },
                         count: None,
                     },
                     BindGroupLayoutEntry {
                         binding: 7,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 8,
                         visibility: ShaderStages::FRAGMENT,
                         ty: BindingType::Buffer {
                             ty: BufferBindingType::Uniform,
@@ -376,6 +482,39 @@ impl FromWorld for CustomMaterialPipeline {
                             min_binding_size: BufferSize::new(
                                 std::mem::size_of::<[f32; 3]>() as u64
                             ),
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 9,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: Some(DirectionalLightSettings::min_size()),
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 10,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: BufferSize::new(
+                                (std::mem::size_of::<PointLightSettings>() * NR_POINT_LIGHTS)
+                                    as u64,
+                            ),
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 11,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: Some(SpotlightSettings::min_size()),
                         },
                         count: None,
                     },

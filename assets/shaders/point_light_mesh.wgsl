@@ -67,5 +67,5 @@ fn fragment(
     @builtin(position) position: vec4<f32>,
     in: FragmentInput
 ) -> @location(0) vec4<f32> {
-    return in.ambient + in.diffuse + in.specular;
+    return in.diffuse;
 }

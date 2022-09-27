@@ -1,10 +1,10 @@
 mod camera;
 mod custom_material;
-mod light_material;
+mod point_light_material;
 
 use camera::*;
 use custom_material::*;
-use light_material::*;
+use point_light_material::*;
 
 use bevy::{
     asset::LoadState,
@@ -12,6 +12,7 @@ use bevy::{
     prelude::*,
     render::{
         extract_component::{ExtractComponent, ExtractComponentPlugin},
+        extract_resource::{ExtractResource, ExtractResourcePlugin},
         render_resource::{
             AddressMode, Extent3d, FilterMode, PrimitiveTopology, SamplerDescriptor,
             TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
@@ -53,6 +54,62 @@ impl ExtractComponent for SpecularTexture {
 
     fn extract_component(item: bevy::ecs::query::QueryItem<Self::Query>) -> Self {
         SpecularTexture((**item).clone())
+    }
+}
+
+#[derive(Component, Deref, Debug)]
+struct EmissionTexture(pub Handle<Image>);
+
+impl ExtractComponent for EmissionTexture {
+    type Query = &'static EmissionTexture;
+    type Filter = ();
+
+    fn extract_component(item: bevy::ecs::query::QueryItem<Self::Query>) -> Self {
+        EmissionTexture((**item).clone())
+    }
+}
+
+#[derive(ExtractResource, Clone, Debug)]
+pub struct DirectionalLight {
+    pub direction: Vec3,
+    pub ambient: Vec4,
+    pub diffuse: Vec4,
+    pub specular: Vec4,
+}
+impl Default for DirectionalLight {
+    fn default() -> Self {
+        Self {
+            direction: Vec3::splat(0.0),
+            ambient: Vec4::splat(0.0),
+            diffuse: Vec4::splat(0.0),
+            specular: Vec4::splat(0.0),
+        }
+    }
+}
+
+#[derive(ExtractResource, Clone, Debug)]
+pub struct Spotlight {
+    pub cutoff: f32,
+    pub outer_cutoff: f32,
+    pub ambient: Vec4,
+    pub diffuse: Vec4,
+    pub specular: Vec4,
+    pub constant: f32,
+    pub linear: f32,
+    pub quadratic: f32,
+}
+impl Default for Spotlight {
+    fn default() -> Self {
+        Self {
+            cutoff: 1.0,
+            outer_cutoff: 2.0,
+            ambient: Vec4::splat(0.0),
+            diffuse: Vec4::splat(0.0),
+            specular: Vec4::splat(0.0),
+            constant: 1.0,
+            linear: 1.0,
+            quadratic: 1.0,
+        }
     }
 }
 
@@ -191,6 +248,19 @@ const CUBE_NORMALS: [[f32; 3]; 36] = [
     [0.0, 1.0, 0.0],
 ];
 
+const CUBE_POS: [Vec3; 10] = [
+    Vec3::new(0.0, 0.0, 0.0),
+    Vec3::new(2.0, 5.0, -15.0),
+    Vec3::new(-1.5, -2.2, -2.5),
+    Vec3::new(-3.8, -2.0, -12.3),
+    Vec3::new(2.4, -0.4, -3.5),
+    Vec3::new(-1.7, 3.0, -7.5),
+    Vec3::new(1.3, -2.0, -2.5),
+    Vec3::new(1.5, 2.0, -2.5),
+    Vec3::new(1.5, 0.2, -1.5),
+    Vec3::new(-1.3, 1.0, -1.5),
+];
+
 fn main() {
     let mut app = App::new();
 
@@ -208,10 +278,15 @@ fn main() {
     //},
     //})
     .insert_resource(TextureShaderResources(None))
+    .init_resource::<DirectionalLight>()
+    .init_resource::<Spotlight>()
     .add_plugins(DefaultPlugins)
     .add_plugin(ExtractComponentPlugin::<DiffuseTexture>::default())
     .add_plugin(ExtractComponentPlugin::<SpecularTexture>::default())
-    .add_plugin(LightMaterialPlugin)
+    .add_plugin(ExtractComponentPlugin::<EmissionTexture>::default())
+    .add_plugin(ExtractResourcePlugin::<DirectionalLight>::default())
+    .add_plugin(ExtractResourcePlugin::<Spotlight>::default())
+    .add_plugin(PointLightMaterialPlugin)
     .add_plugin(CustomMaterialPlugin)
     .add_plugin(CameraPlugin)
     .add_state(AppState::LoadAssets)
@@ -235,6 +310,7 @@ fn load_assets(
     **texture_resources = Some(vec![
         asset_server.load("textures/container2.png"),
         asset_server.load("textures/container2_specular.png"),
+        asset_server.load("textures/matrix.png"),
     ]);
 }
 
@@ -262,7 +338,10 @@ fn extract_custom_camera(mut commands: Commands, world: Res<MainWorld>) {
     }
 }
 
-fn move_light(mut query: Query<&mut LightInstances, With<LightMaterial>>, time: Res<Time>) {
+fn move_light(
+    mut query: Query<&mut PointLightInstances, With<PointLightMaterial>>,
+    time: Res<Time>,
+) {
     for mut light_instances in &mut query {
         let time_val = time.seconds_since_startup() as f32;
         light_instances[0].position.x = time_val.sin();
@@ -328,26 +407,75 @@ fn setup(
     //v_color,
     //);
 
+    commands.insert_resource(DirectionalLight {
+        direction: Vec3::new(-0.2, -1.0, -0.3),
+        ambient: Vec3::splat(0.05).extend(1.0),
+        diffuse: Vec3::splat(0.4).extend(1.0),
+        specular: Vec3::splat(0.5).extend(1.0),
+    });
+
+    commands.insert_resource(Spotlight {
+        cutoff: 12.5,
+        outer_cutoff: 15.0,
+        ambient: Vec3::splat(0.1).extend(1.0),
+        diffuse: Vec3::splat(1.0).extend(1.0),
+        specular: Vec3::splat(1.0).extend(1.0),
+        constant: 1.0,
+        linear: 0.09,
+        quadratic: 0.032,
+    });
+
     commands
         .spawn()
         .insert_bundle((
             meshes.add(mesh),
-            LightInstances(vec![LightInstance {
-                position: Vec3::new(0.0, 1.0, 2.0),
-                ambient: Vec3::splat(0.1).extend(1.0),
-                diffuse: Vec3::splat(1.0).extend(1.0),
-                specular: Vec3::splat(0.5).extend(1.0),
-            }]),
-            LightMaterial,
-            NoFrustumCulling,
+            PointLightInstances(vec![
+                PointLightInstance {
+                    position: Vec3::new(0.7, 0.2, 2.0),
+                    constant: 1.0,
+                    linear: 0.09,
+                    quadratic: 0.032,
+                    ambient: Vec3::splat(0.05).extend(1.0),
+                    diffuse: Vec3::splat(0.8).extend(1.0),
+                    specular: Vec3::splat(1.0).extend(1.0),
+                },
+                PointLightInstance {
+                    position: Vec3::new(2.3, -3.3, -4.0),
+                    constant: 1.0,
+                    linear: 0.09,
+                    quadratic: 0.032,
+                    ambient: Vec4::from(Color::RED),
+                    diffuse: Vec4::from(Color::RED),
+                    specular: Vec3::splat(1.0).extend(1.0),
+                },
+                PointLightInstance {
+                    position: Vec3::new(-4.0, 2.0, -1.0),
+                    constant: 1.0,
+                    linear: 0.09,
+                    quadratic: 0.032,
+                    ambient: Vec3::splat(0.05).extend(1.0),
+                    diffuse: Vec3::splat(0.8).extend(1.0),
+                    specular: Vec3::splat(1.0).extend(1.0),
+                },
+                PointLightInstance {
+                    position: Vec3::new(0.0, 0.0, -3.0),
+                    constant: 1.0,
+                    linear: 0.09,
+                    quadratic: 0.032,
+                    ambient: Vec3::splat(0.05).extend(1.0),
+                    diffuse: Vec3::splat(0.8).extend(1.0),
+                    specular: Vec3::splat(1.0).extend(1.0),
+                },
+            ]),
+            PointLightMaterial,
         ))
         .insert_bundle(SpatialBundle::default());
 
     match &**textures {
         Some(textures) => {
-            // Base color texture
-            let mut image = images.get_mut(&textures[0]).unwrap();
-            image.texture_descriptor = TextureDescriptor {
+            /////////////////////////// Diffuse texture
+            let mut diffuse = images.get_mut(&textures[0]).unwrap();
+            diffuse.texture_descriptor = TextureDescriptor {
                 label: None,
                 size: Extent3d {
                     width: 500,
@@ -363,7 +491,7 @@ fn setup(
                     | TextureUsages::COPY_DST
                     | TextureUsages::RENDER_ATTACHMENT,
             };
-            image.sampler_descriptor = ImageSampler::Descriptor(SamplerDescriptor {
+            diffuse.sampler_descriptor = ImageSampler::Descriptor(SamplerDescriptor {
                 address_mode_u: AddressMode::Repeat,
                 address_mode_v: AddressMode::Repeat,
                 address_mode_w: AddressMode::Repeat,
@@ -371,9 +499,9 @@ fn setup(
                 ..default()
             });
 
-            // Mix color texture
-            let mut image2 = images.get_mut(&textures[1]).unwrap();
-            image2.texture_descriptor = TextureDescriptor {
+            /////////////////////////// Specular texture
+            let mut specular = images.get_mut(&textures[1]).unwrap();
+            specular.texture_descriptor = TextureDescriptor {
                 label: None,
                 size: Extent3d {
                     width: 500,
@@ -389,7 +517,33 @@ fn setup(
                     | TextureUsages::COPY_DST
                     | TextureUsages::RENDER_ATTACHMENT,
             };
-            image2.sampler_descriptor = ImageSampler::Descriptor(SamplerDescriptor {
+            specular.sampler_descriptor = ImageSampler::Descriptor(SamplerDescriptor {
+                address_mode_u: AddressMode::Repeat,
+                address_mode_v: AddressMode::Repeat,
+                address_mode_w: AddressMode::Repeat,
+                mag_filter: FilterMode::Nearest,
+                ..default()
+            });
+
+            /////////////////////////// Emission texture
+            let mut emission = images.get_mut(&textures[1]).unwrap();
+            emission.texture_descriptor = TextureDescriptor {
+                label: None,
+                size: Extent3d {
+                    width: 500,
+                    height: 500,
+                    ..default()
+                },
+                // TODO: figure out why this doesn't work for > 1
+                mip_level_count: 1,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Rgba8UnormSrgb,
+                sample_count: 1,
+                usage: TextureUsages::TEXTURE_BINDING
+                    | TextureUsages::COPY_DST
+                    | TextureUsages::RENDER_ATTACHMENT,
+            };
+            emission.sampler_descriptor = ImageSampler::Descriptor(SamplerDescriptor {
                 address_mode_u: AddressMode::Repeat,
                 address_mode_v: AddressMode::Repeat,
                 address_mode_w: AddressMode::Repeat,
@@ -410,13 +564,20 @@ fn setup(
                 .spawn()
                 .insert_bundle((
                     meshes.add(mesh),
-                    MaterialInstances(vec![MaterialInstance {
-                        position: Vec3::new(0.0, 0.0, 0.0),
-                        specular: Color::rgba(0.501_960_7, 0.501_960_7, 0.501_960_7, 1.0).into(),
-                        shininess: 25.0,
-                    }]),
+                    MaterialInstances(
+                        (0..10)
+                            .map(|i| MaterialInstance {
+                                position: CUBE_POS[i],
+                                rotation_y: (20.0_f32 * i as f32).to_radians(),
+                                rotation_x: (10.0_f32 * i as f32).to_radians(),
+                                rotation_z: 0.0,
+                                shininess: 25.0,
+                            })
+                            .collect(),
+                    ),
                     DiffuseTexture(textures[0].clone()),
                     SpecularTexture(textures[1].clone()),
+                    EmissionTexture(textures[2].clone()),
                     CustomMaterial,
                     // NOTE: Frustum culling is done based on the Aabb of the Mesh and the GlobalTransform.
                     // As the cube is at the origin, if its Aabb moves outside the view frustum, all the

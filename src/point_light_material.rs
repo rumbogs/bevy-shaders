@@ -32,8 +32,11 @@ use bevy::{
 use bytemuck::{Pod, Zeroable};
 
 #[derive(Component, Debug, Clone, Copy)]
-pub struct LightInstance {
+pub struct PointLightInstance {
     pub position: Vec3,
+    pub constant: f32,
+    pub linear: f32,
+    pub quadratic: f32,
     pub ambient: Vec4,
     pub diffuse: Vec4,
     pub specular: Vec4,
@@ -41,7 +44,7 @@ pub struct LightInstance {
 
 #[derive(Component, Debug, Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
-struct RenderLightInstance {
+struct RenderPointLightInstance {
     position: Mat4,
     ambient: Vec4,
     diffuse: Vec4,
@@ -49,53 +52,53 @@ struct RenderLightInstance {
 }
 
 #[derive(Component, Deref, DerefMut, Debug)]
-pub struct LightInstances(pub Vec<LightInstance>);
+pub struct PointLightInstances(pub Vec<PointLightInstance>);
 
-impl ExtractComponent for LightInstances {
-    type Query = &'static LightInstances;
+impl ExtractComponent for PointLightInstances {
+    type Query = &'static PointLightInstances;
     type Filter = ();
 
     fn extract_component(item: bevy::ecs::query::QueryItem<Self::Query>) -> Self {
-        LightInstances(item.0.clone())
+        PointLightInstances(item.0.clone())
     }
 }
 
 #[derive(Component)]
-pub struct LightMaterial;
+pub struct PointLightMaterial;
 
-impl ExtractComponent for LightMaterial {
-    type Query = &'static LightMaterial;
+impl ExtractComponent for PointLightMaterial {
+    type Query = &'static PointLightMaterial;
     type Filter = ();
 
     fn extract_component(_item: bevy::ecs::query::QueryItem<Self::Query>) -> Self {
-        LightMaterial
+        PointLightMaterial
     }
 }
 
-pub struct LightMaterialPlugin;
+pub struct PointLightMaterialPlugin;
 
-impl Plugin for LightMaterialPlugin {
+impl Plugin for PointLightMaterialPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugin(ExtractComponentPlugin::<LightMaterial>::default())
-            .add_plugin(ExtractComponentPlugin::<LightInstances>::default());
+        app.add_plugin(ExtractComponentPlugin::<PointLightMaterial>::default())
+            .add_plugin(ExtractComponentPlugin::<PointLightInstances>::default());
         app.sub_app_mut(RenderApp)
             .add_render_command::<Transparent3d, DrawLightMaterial>()
-            .init_resource::<LightMaterialPipeline>()
-            .init_resource::<SpecializedMeshPipelines<LightMaterialPipeline>>()
-            .add_system_to_stage(RenderStage::Queue, queue_light_material)
-            .add_system_to_stage(RenderStage::Prepare, prepare_light_material_buffers);
+            .init_resource::<PointLightMaterialPipeline>()
+            .init_resource::<SpecializedMeshPipelines<PointLightMaterialPipeline>>()
+            .add_system_to_stage(RenderStage::Queue, queue_point_light_material)
+            .add_system_to_stage(RenderStage::Prepare, prepare_point_light_material_buffers);
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn queue_light_material(
+fn queue_point_light_material(
     transparent_3d_draw_functions: Res<DrawFunctions<Transparent3d>>,
-    light_material_pipeline: Res<LightMaterialPipeline>,
+    light_material_pipeline: Res<PointLightMaterialPipeline>,
     msaa: Res<Msaa>,
-    mut pipelines: ResMut<SpecializedMeshPipelines<LightMaterialPipeline>>,
+    mut pipelines: ResMut<SpecializedMeshPipelines<PointLightMaterialPipeline>>,
     mut pipeline_cache: ResMut<PipelineCache>,
     meshes: Res<RenderAssets<Mesh>>,
-    light_material_meshes: Query<(Entity, &MeshUniform, &Handle<Mesh>), With<LightMaterial>>,
+    light_material_meshes: Query<(Entity, &MeshUniform, &Handle<Mesh>), With<PointLightMaterial>>,
     mut views: Query<(&ExtractedView, &mut RenderPhase<Transparent3d>)>,
 ) {
     let draw_light_material = transparent_3d_draw_functions
@@ -130,12 +133,12 @@ fn queue_light_material(
     }
 }
 
-pub fn prepare_light_material_buffers(
+pub fn prepare_point_light_material_buffers(
     mut commands: Commands,
-    query: Query<(Entity, &LightInstances), With<LightMaterial>>,
+    query: Query<(Entity, &PointLightInstances), With<PointLightMaterial>>,
     camera: Res<CustomCamera>,
     render_device: Res<RenderDevice>,
-    pipeline: Res<LightMaterialPipeline>,
+    pipeline: Res<PointLightMaterialPipeline>,
 ) {
     for (entity, light_instances) in &query {
         let instance_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
@@ -143,13 +146,13 @@ pub fn prepare_light_material_buffers(
             contents: bytemuck::cast_slice(
                 light_instances
                     .iter()
-                    .map(|instance| RenderLightInstance {
+                    .map(|instance| RenderPointLightInstance {
                         position: Mat4::from_translation(instance.position),
                         ambient: instance.ambient,
                         diffuse: instance.diffuse,
                         specular: instance.specular,
                     })
-                    .collect::<Vec<RenderLightInstance>>()
+                    .collect::<Vec<RenderPointLightInstance>>()
                     .as_slice(),
             ),
             usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
@@ -187,18 +190,18 @@ pub fn prepare_light_material_buffers(
     }
 }
 
-pub struct LightMaterialPipeline {
+pub struct PointLightMaterialPipeline {
     shader: Handle<Shader>,
     mesh_pipeline: MeshPipeline,
     bind_group_layout: BindGroupLayout,
 }
 
-impl FromWorld for LightMaterialPipeline {
+impl FromWorld for PointLightMaterialPipeline {
     fn from_world(world: &mut World) -> Self {
         let asset_server = world.resource::<AssetServer>();
         let render_device = world.resource::<RenderDevice>();
         asset_server.watch_for_changes().unwrap();
-        let shader = asset_server.load("shaders/light_mesh.wgsl");
+        let shader = asset_server.load("shaders/point_light_mesh.wgsl");
 
         let mesh_pipeline = world.resource::<MeshPipeline>();
 
@@ -229,7 +232,7 @@ impl FromWorld for LightMaterialPipeline {
                 ],
             });
 
-        LightMaterialPipeline {
+        PointLightMaterialPipeline {
             shader,
             mesh_pipeline: mesh_pipeline.clone(),
             bind_group_layout,
@@ -237,7 +240,7 @@ impl FromWorld for LightMaterialPipeline {
     }
 }
 
-impl SpecializedMeshPipeline for LightMaterialPipeline {
+impl SpecializedMeshPipeline for PointLightMaterialPipeline {
     type Key = MeshPipelineKey;
 
     fn specialize(
@@ -248,7 +251,7 @@ impl SpecializedMeshPipeline for LightMaterialPipeline {
         let mut descriptor = self.mesh_pipeline.specialize(key, layout)?;
         descriptor.vertex.shader = self.shader.clone();
         descriptor.vertex.buffers.push(VertexBufferLayout {
-            array_stride: (std::mem::size_of::<Mat4>() as u64),
+            array_stride: (std::mem::size_of::<RenderPointLightInstance>() as u64),
             step_mode: VertexStepMode::Instance,
             attributes: vec![
                 // shader locations 0-2 is taken up by Position, Normal, UV
